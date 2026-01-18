@@ -1,0 +1,105 @@
+{
+  "app": {
+    "name": "RSync",
+    "tagline": "Snelle, betrouwbare bestandssynchronisatie"
+  },
+  "nav": {
+    "sync": "Synchroniseren",
+    "history": "Geschiedenis",
+    "settings": "Instellingen"
+  },
+  "sync": {
+    "dropzone": {
+      "title": "Sleep bestanden of mappen hierheen",
+      "subtitle": "of klik om te bladeren",
+      "dragging": "Laat los om bestanden toe te voegen"
+    },
+    "source": "Bron",
+    "destination": "Bestemming",
+    "startSync": "Synchronisatie starten",
+    "pause": "Pauzeren",
+    "resume": "Hervatten",
+    "cancel": "Annuleren"
+  },
+  "options": {
+    "title": "Synchronisatieopties",
+    "mode": "Modus",
+    "copy": "Kopieren",
+    "move": "Verplaatsen",
+    "conflictResolution": "Bij conflicterende bestanden",
+    "overwrite": "Bestemming overschrijven",
+    "skip": "Bestaande overslaan",
+    "rename": "Nieuw bestand hernoemen",
+    "ask": "Vraag het mij",
+    "verifyIntegrity": "Bestandsintegriteit controleren",
+    "preserveMetadata": "Tijdstempels behouden",
+    "deleteOrphans": "Verweesde bestanden verwijderen"
+  },
+  "progress": {
+    "syncing": "Synchroniseren...",
+    "filesComplete": "{{done}} van {{total}} bestanden",
+    "speed": "{{speed}}/s",
+    "eta": "{{time}} resterend",
+    "complete": "Synchronisatie voltooid",
+    "paused": "Gepauzeerd",
+    "cancelled": "Geannuleerd",
+    "failed": "Synchronisatie mislukt"
+  },
+  "conflict": {
+    "title": "Bestandsconflict",
+    "message": "Er bestaat al een bestand met deze naam",
+    "source": "Bronbestand",
+    "destination": "Bestaand bestand",
+    "applyToAll": "Toepassen op alle conflicten"
+  },
+  "settings": {
+    "title": "Instellingen",
+    "appearance": "Weergave",
+    "theme": "Thema",
+    "themes": {
+      "system": "Systeem",
+      "light": "Licht",
+      "dark": "Donker",
+      "oled": "OLED"
+    },
+    "language": "Taal",
+    "languages": {
+      "en": "English",
+      "nl": "Nederlands"
+    },
+    "permissions": "Machtigingen",
+    "fullDiskAccess": "Volledige schijftoegang",
+    "fullDiskAccessDesc": "Vereist om toegang te krijgen tot alle bestanden en mappen",
+    "enabled": "Ingeschakeld",
+    "disabled": "Uitgeschakeld",
+    "openSettings": "Systeeminstellingen openen"
+  },
+  "history": {
+    "title": "Overdrachtsgeschiedenis",
+    "empty": "Nog geen overdrachten",
+    "clearHistory": "Geschiedenis wissen"
+  },
+  "errors": {
+    "generic": "Er is een fout opgetreden",
+    "noPermission": "Toegang geweigerd",
+    "fileNotFound": "Bestand niet gevonden",
+    "diskFull": "Schijf is vol",
+    "networkError": "Netwerkfout",
+    "cancelled": "Overdracht geannuleerd"
+  },
+  "common": {
+    "browse": "Bladeren",
+    "select": "Selecteren",
+    "confirm": "Bevestigen",
+    "cancel": "Annuleren",
+    "close": "Sluiten",
+    "save": "Opslaan",
+    "delete": "Verwijderen",
+    "size": "Grootte",
+    "modified": "Gewijzigd",
+    "bytes": "bytes",
+    "kb": "KB",
+    "mb": "MB",
+    "gb": "GB"
+  }
+}

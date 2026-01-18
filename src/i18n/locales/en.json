@@ -1,0 +1,105 @@
+{
+  "app": {
+    "name": "RSync",
+    "tagline": "Fast, reliable file synchronization"
+  },
+  "nav": {
+    "sync": "Sync",
+    "history": "History",
+    "settings": "Settings"
+  },
+  "sync": {
+    "dropzone": {
+      "title": "Drop files or folders here",
+      "subtitle": "or click to browse",
+      "dragging": "Release to add files"
+    },
+    "source": "Source",
+    "destination": "Destination",
+    "startSync": "Start Sync",
+    "pause": "Pause",
+    "resume": "Resume",
+    "cancel": "Cancel"
+  },
+  "options": {
+    "title": "Sync Options",
+    "mode": "Mode",
+    "copy": "Copy",
+    "move": "Move",
+    "conflictResolution": "When files conflict",
+    "overwrite": "Overwrite destination",
+    "skip": "Skip existing",
+    "rename": "Rename new file",
+    "ask": "Ask me",
+    "verifyIntegrity": "Verify file integrity",
+    "preserveMetadata": "Preserve timestamps",
+    "deleteOrphans": "Delete orphaned files"
+  },
+  "progress": {
+    "syncing": "Syncing...",
+    "filesComplete": "{{done}} of {{total}} files",
+    "speed": "{{speed}}/s",
+    "eta": "{{time}} remaining",
+    "complete": "Sync complete",
+    "paused": "Paused",
+    "cancelled": "Cancelled",
+    "failed": "Sync failed"
+  },
+  "conflict": {
+    "title": "File Conflict",
+    "message": "A file with this name already exists",
+    "source": "Source file",
+    "destination": "Existing file",
+    "applyToAll": "Apply to all conflicts"
+  },
+  "settings": {
+    "title": "Settings",
+    "appearance": "Appearance",
+    "theme": "Theme",
+    "themes": {
+      "system": "System",
+      "light": "Light",
+      "dark": "Dark",
+      "oled": "OLED"
+    },
+    "language": "Language",
+    "languages": {
+      "en": "English",
+      "nl": "Nederlands"
+    },
+    "permissions": "Permissions",
+    "fullDiskAccess": "Full Disk Access",
+    "fullDiskAccessDesc": "Required to access all files and folders",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "openSettings": "Open System Settings"
+  },
+  "history": {
+    "title": "Transfer History",
+    "empty": "No transfers yet",
+    "clearHistory": "Clear History"
+  },
+  "errors": {
+    "generic": "An error occurred",
+    "noPermission": "Permission denied",
+    "fileNotFound": "File not found",
+    "diskFull": "Disk is full",
+    "networkError": "Network error",
+    "cancelled": "Transfer cancelled"
+  },
+  "common": {
+    "browse": "Browse",
+    "select": "Select",
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "close": "Close",
+    "save": "Save",
+    "delete": "Delete",
+    "size": "Size",
+    "modified": "Modified",
+    "bytes": "bytes",
+    "kb": "KB",
+    "mb": "MB",
+    "gb": "GB"
+  }
+}
