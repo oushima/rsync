@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
+import { homeDir } from '@tauri-apps/api/path';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useSyncStore } from '../stores/syncStore';
 import { useSettingsStore } from '../stores/settingsStore';
-import type { FileItem } from '../types';
+import type { FileItem, TransferQueueItem } from '../types';
 
 interface BackendProgressEvent {
   transferId: string;
@@ -30,6 +31,7 @@ export function useSync() {
     syncOptions,
     transferStats,
     transferId,
+    transferQueue,
     setSourcePath,
     setDestPath,
     addFiles,
@@ -46,9 +48,25 @@ export function useSync() {
     cancelSync,
     reset,
     addHistoryItem,
+    addToQueue,
+    removeFromQueue,
+    updateQueueItem,
+    startNextTransfer,
+    markTransferComplete,
+    markTransferError,
+    clearCompletedFromQueue,
+    getNextPendingTransfer,
   } = useSyncStore();
 
+  // State for source missing error modal
+  const [sourceMissingError, setSourceMissingError] = useState<{
+    isOpen: boolean;
+    queueItem: TransferQueueItem | null;
+  }>({ isOpen: false, queueItem: null });
+
   const activeTransferRef = useRef<string | null>(transferId);
+  const dialogDefaultPathRef = useRef<string | undefined>(undefined);
+  const isProcessingQueueRef = useRef(false);
   useEffect(() => {
     activeTransferRef.current = transferId;
   }, [transferId]);
@@ -129,6 +147,25 @@ export function useSync() {
     }
   }, [addFiles, clearFiles, joinPath]);
 
+  useEffect(() => {
+    if (!isTauriApp()) return;
+    let isMounted = true;
+    homeDir()
+      .then((path) => {
+        if (isMounted) {
+          dialogDefaultPathRef.current = path;
+        }
+      })
+      .catch((error) => {
+        console.warn('Failed to resolve home directory for dialog:', error);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const getDialogDefaultPath = useCallback(() => dialogDefaultPathRef.current, []);
+
   const selectSourceFolder = useCallback(async () => {
     try {
       if (!isTauriApp()) {
@@ -156,10 +193,12 @@ export function useSync() {
         return;
       }
 
+      const defaultPath = getDialogDefaultPath();
       const selected = await open({
         directory: true,
         multiple: false,
         title: 'Select Source Folder',
+        defaultPath,
       });
 
       if (selected) {
@@ -188,10 +227,12 @@ export function useSync() {
         return;
       }
 
+      const defaultPath = getDialogDefaultPath();
       const selected = await open({
         directory: true,
         multiple: false,
         title: 'Select Destination Folder',
+        defaultPath,
       });
 
       if (selected) {
@@ -225,10 +266,12 @@ export function useSync() {
         return;
       }
 
+      const defaultPath = getDialogDefaultPath();
       const selected = await open({
         directory: false,
         multiple: true,
         title: 'Select Files to Sync',
+        defaultPath,
       });
 
       if (selected && Array.isArray(selected)) {
@@ -275,10 +318,12 @@ export function useSync() {
         return;
       }
 
+      const defaultPath = getDialogDefaultPath();
       const selected = await open({
         directory: true,
         multiple: false,
         title: 'Select Folder to Sync',
+        defaultPath,
       });
 
       if (selected) {
@@ -292,20 +337,46 @@ export function useSync() {
   }, [addFiles, clearFiles, loadDirectoryInfo, setSourcePath]);
 
   const mapBackendOptions = useCallback(() => {
-    const conflictResolution = syncOptions.skipExisting ? 'skip' : 'overwrite';
+    // Determine conflict resolution as fallback when overwrite flags aren't set
+    let conflictResolution: 'skip' | 'overwrite' | 'rename' | 'ask';
+    if (syncOptions.skipExisting) {
+      conflictResolution = 'skip';
+    } else if (syncOptions.overwriteNewer || syncOptions.overwriteOlder) {
+      conflictResolution = 'overwrite';
+    } else {
+      conflictResolution = 'skip';
+    }
+
     return {
       source: sourcePath || '',
       destination: destPath || '',
       mode: 'copy',
       conflict_resolution: conflictResolution,
-      verify_integrity: true,
+      verify_integrity: syncOptions.verifyChecksum !== 'off',
       preserve_metadata: syncOptions.preservePermissions,
       delete_orphans: syncOptions.deleteOrphans,
       buffer_size: null,
       dry_run: syncOptions.dryRun,
       follow_symlinks: syncOptions.followSymlinks,
+      max_concurrent_files: syncOptions.maxConcurrentFiles,
+      // New explicit flags for timestamp-based overwrite logic
+      overwrite_newer: syncOptions.overwriteNewer,
+      overwrite_older: syncOptions.overwriteOlder,
+      skip_existing: syncOptions.skipExisting,
     };
-  }, [destPath, sourcePath, syncOptions.deleteOrphans, syncOptions.dryRun, syncOptions.followSymlinks, syncOptions.preservePermissions, syncOptions.skipExisting]);
+  }, [
+    destPath,
+    sourcePath,
+    syncOptions.deleteOrphans,
+    syncOptions.dryRun,
+    syncOptions.followSymlinks,
+    syncOptions.maxConcurrentFiles,
+    syncOptions.overwriteNewer,
+    syncOptions.overwriteOlder,
+    syncOptions.preservePermissions,
+    syncOptions.skipExisting,
+    syncOptions.verifyChecksum,
+  ]);
 
   const handleStartSync = useCallback(async () => {
     if (!destPath || files.length === 0) return;
@@ -526,6 +597,126 @@ export function useSync() {
     return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
   }, []);
 
+  // Check if source path exists
+  const checkSourceExists = useCallback(async (path: string): Promise<boolean> => {
+    if (!isTauriApp()) return true;
+    try {
+      await invoke<{ files: unknown[] }>('get_directory_info', { path });
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  // Queue a transfer for later execution
+  const queueTransfer = useCallback((source: string, dest: string): string => {
+    return addToQueue(source, dest);
+  }, [addToQueue]);
+
+  // Process the next item in the queue
+  const processNextInQueue = useCallback(async () => {
+    if (isProcessingQueueRef.current) return;
+    
+    const nextItem = getNextPendingTransfer();
+    if (!nextItem) {
+      isProcessingQueueRef.current = false;
+      return;
+    }
+
+    isProcessingQueueRef.current = true;
+
+    // Validate source path exists
+    const sourceExists = await checkSourceExists(nextItem.sourcePath);
+    if (!sourceExists) {
+      // Show error modal for missing source
+      setSourceMissingError({ isOpen: true, queueItem: nextItem });
+      isProcessingQueueRef.current = false;
+      return;
+    }
+
+    // Start the transfer
+    const started = startNextTransfer();
+    if (!started) {
+      isProcessingQueueRef.current = false;
+      return;
+    }
+
+    // Set up the paths and start sync
+    setSourcePath(started.sourcePath);
+    setDestPath(started.destPath);
+    
+    // Load directory info and start
+    try {
+      await loadDirectoryInfo(started.sourcePath);
+      // The actual sync will be triggered after files are loaded
+    } catch (error) {
+      console.error('Failed to load directory for queued transfer:', error);
+      markTransferError(started.id, 'Failed to load source directory');
+      isProcessingQueueRef.current = false;
+      // Try next item
+      setTimeout(() => processNextInQueue(), 100);
+    }
+  }, [
+    getNextPendingTransfer,
+    checkSourceExists,
+    startNextTransfer,
+    setSourcePath,
+    setDestPath,
+    loadDirectoryInfo,
+    markTransferError,
+  ]);
+
+  // Handle removing errored item from queue and continue
+  const handleRemoveErroredFromQueue = useCallback(() => {
+    if (sourceMissingError.queueItem) {
+      markTransferError(sourceMissingError.queueItem.id, 'Source folder not found');
+    }
+    setSourceMissingError({ isOpen: false, queueItem: null });
+    // Continue with next item
+    setTimeout(() => processNextInQueue(), 100);
+  }, [sourceMissingError.queueItem, markTransferError, processNextInQueue]);
+
+  // Handle retry later - keep in queue but skip for now
+  const handleRetryLater = useCallback(() => {
+    // Just close the modal, item stays in queue as pending
+    setSourceMissingError({ isOpen: false, queueItem: null });
+  }, []);
+
+  // Start processing the queue
+  const startQueue = useCallback(async () => {
+    if (syncState !== 'idle' || isProcessingQueueRef.current) return;
+    await processNextInQueue();
+  }, [syncState, processNextInQueue]);
+
+  // Effect to auto-start next queued transfer when current completes
+  useEffect(() => {
+    if (syncState === 'completed' || syncState === 'error' || syncState === 'cancelled') {
+      // Mark current queue item as complete/error if there's a running one
+      const runningItem = transferQueue.find((item) => item.status === 'running');
+      if (runningItem) {
+        if (syncState === 'completed') {
+          markTransferComplete(runningItem.id);
+        } else if (syncState === 'error') {
+          markTransferError(runningItem.id, 'Transfer failed');
+        } else if (syncState === 'cancelled') {
+          updateQueueItem(runningItem.id, { status: 'cancelled', completedAt: new Date() });
+        }
+      }
+
+      isProcessingQueueRef.current = false;
+
+      // Check for more items in queue
+      const hasMorePending = transferQueue.some((item) => item.status === 'pending');
+      if (hasMorePending && syncState !== 'cancelled') {
+        // Reset state for next transfer
+        setTimeout(() => {
+          reset();
+          processNextInQueue();
+        }, 1000);
+      }
+    }
+  }, [syncState, transferQueue, markTransferComplete, markTransferError, updateQueueItem, reset, processNextInQueue]);
+
   return {
     // State
     files,
@@ -534,6 +725,8 @@ export function useSync() {
     syncState,
     syncOptions,
     transferStats,
+    transferQueue,
+    sourceMissingError,
     
     // Actions
     selectSourceFolder,
@@ -550,6 +743,14 @@ export function useSync() {
     cancelSync: handleCancelSync,
     reset,
     
+    // Queue actions
+    queueTransfer,
+    removeFromQueue,
+    startQueue,
+    clearCompletedFromQueue,
+    handleRemoveErroredFromQueue,
+    handleRetryLater,
+    
     // Utils
     formatBytes,
     formatTime,
@@ -559,5 +760,6 @@ export function useSync() {
     isRunning: ['preparing', 'syncing'].includes(syncState),
     isPaused: syncState === 'paused',
     isComplete: syncState === 'completed',
+    hasQueuedTransfers: transferQueue.some((item) => item.status === 'pending'),
   };
 }

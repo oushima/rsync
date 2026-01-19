@@ -8,6 +8,8 @@ import type {
   ConflictResolution,
   TransferHistoryItem,
   NavigationPage,
+  TransferQueueItem,
+  VolumeInfo,
 } from '../types';
 
 interface SyncStore {
@@ -15,11 +17,21 @@ interface SyncStore {
   currentPage: NavigationPage;
   setCurrentPage: (page: NavigationPage) => void;
 
+  // Drag state
+  isDraggingFiles: boolean;
+  dragOverZone: 'source' | 'destination' | null;
+  setIsDraggingFiles: (dragging: boolean) => void;
+  setDragOverZone: (zone: 'source' | 'destination' | null) => void;
+
   // Source and destination
   sourcePath: string | null;
   destPath: string | null;
+  sourceVolumeInfo: VolumeInfo | null;
+  destVolumeInfo: VolumeInfo | null;
   setSourcePath: (path: string | null) => void;
   setDestPath: (path: string | null) => void;
+  setSourceVolumeInfo: (info: VolumeInfo | null) => void;
+  setDestVolumeInfo: (info: VolumeInfo | null) => void;
 
   // Files
   files: FileItem[];
@@ -59,6 +71,17 @@ interface SyncStore {
   addHistoryItem: (item: TransferHistoryItem) => void;
   clearHistory: () => void;
 
+  // Transfer Queue
+  transferQueue: TransferQueueItem[];
+  addToQueue: (sourcePath: string, destPath: string) => string;
+  removeFromQueue: (id: string) => void;
+  updateQueueItem: (id: string, updates: Partial<TransferQueueItem>) => void;
+  startNextTransfer: () => TransferQueueItem | null;
+  markTransferComplete: (id: string) => void;
+  markTransferError: (id: string, error: string) => void;
+  clearCompletedFromQueue: () => void;
+  getNextPendingTransfer: () => TransferQueueItem | null;
+
   // Actions
   startSync: () => void;
   pauseSync: () => void;
@@ -77,6 +100,7 @@ const defaultTransferStats: TransferStats = {
   startTime: null,
   estimatedTimeRemaining: null,
   currentFile: null,
+  currentFiles: [],
 };
 
 const defaultSyncOptions: SyncOptions = {
@@ -90,6 +114,7 @@ const defaultSyncOptions: SyncOptions = {
   verifyChecksum: 'off',
   autoRepair: true,
   shutdownAfterComplete: false,
+  maxConcurrentFiles: 4, // Good default for SSDs and network drives
 };
 
 export const useSyncStore = create<SyncStore>((set, get) => ({
@@ -97,11 +122,21 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
   currentPage: 'sync',
   setCurrentPage: (page) => set({ currentPage: page }),
 
+  // Drag state
+  isDraggingFiles: false,
+  dragOverZone: null,
+  setIsDraggingFiles: (dragging) => set({ isDraggingFiles: dragging, dragOverZone: dragging ? get().dragOverZone : null }),
+  setDragOverZone: (zone) => set({ dragOverZone: zone }),
+
   // Paths
   sourcePath: null,
   destPath: null,
-  setSourcePath: (path) => set({ sourcePath: path }),
-  setDestPath: (path) => set({ destPath: path }),
+  sourceVolumeInfo: null,
+  destVolumeInfo: null,
+  setSourcePath: (path) => set({ sourcePath: path, sourceVolumeInfo: path ? get().sourceVolumeInfo : null }),
+  setDestPath: (path) => set({ destPath: path, destVolumeInfo: path ? get().destVolumeInfo : null }),
+  setSourceVolumeInfo: (info) => set({ sourceVolumeInfo: info }),
+  setDestVolumeInfo: (info) => set({ destVolumeInfo: info }),
 
   // Files
   files: [],
@@ -189,6 +224,82 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
       history: [item, ...state.history].slice(0, 50), // Keep last 50 items
     })),
   clearHistory: () => set({ history: [] }),
+
+  // Transfer Queue
+  transferQueue: [],
+  
+  addToQueue: (sourcePath, destPath) => {
+    const id = crypto.randomUUID();
+    const newItem: TransferQueueItem = {
+      id,
+      sourcePath,
+      destPath,
+      status: 'pending',
+      addedAt: new Date(),
+    };
+    set((state) => ({
+      transferQueue: [...state.transferQueue, newItem],
+    }));
+    return id;
+  },
+
+  removeFromQueue: (id) =>
+    set((state) => ({
+      transferQueue: state.transferQueue.filter((item) => item.id !== id),
+    })),
+
+  updateQueueItem: (id, updates) =>
+    set((state) => ({
+      transferQueue: state.transferQueue.map((item) =>
+        item.id === id ? { ...item, ...updates } : item
+      ),
+    })),
+
+  startNextTransfer: () => {
+    const state = get();
+    const nextPending = state.transferQueue.find((item) => item.status === 'pending');
+    if (nextPending) {
+      set((state) => ({
+        transferQueue: state.transferQueue.map((item) =>
+          item.id === nextPending.id
+            ? { ...item, status: 'running' as const, startedAt: new Date() }
+            : item
+        ),
+      }));
+      return nextPending;
+    }
+    return null;
+  },
+
+  markTransferComplete: (id) =>
+    set((state) => ({
+      transferQueue: state.transferQueue.map((item) =>
+        item.id === id
+          ? { ...item, status: 'completed' as const, completedAt: new Date() }
+          : item
+      ),
+    })),
+
+  markTransferError: (id, error) =>
+    set((state) => ({
+      transferQueue: state.transferQueue.map((item) =>
+        item.id === id
+          ? { ...item, status: 'error' as const, error, completedAt: new Date() }
+          : item
+      ),
+    })),
+
+  clearCompletedFromQueue: () =>
+    set((state) => ({
+      transferQueue: state.transferQueue.filter(
+        (item) => item.status === 'pending' || item.status === 'running'
+      ),
+    })),
+
+  getNextPendingTransfer: () => {
+    const state = get();
+    return state.transferQueue.find((item) => item.status === 'pending') || null;
+  },
 
   // Actions
   startSync: () => {

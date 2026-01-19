@@ -15,44 +15,51 @@ export function PermissionsPanel() {
 
   const texts = {
     en: {
-      title: 'File access',
-      description: 'RSync needs your permission to read and copy files on your Mac. Without this, the app cannot see your files.',
+      title: 'Full Disk Access',
+      description: 'Only needed if you want to sync system-protected folders like Mail, Messages, or Safari data. For regular folders, you can skip this.',
       fullDiskAccess: 'Full Disk Access',
       granted: 'Allowed ✓',
-      denied: 'Not allowed yet',
+      denied: 'Not enabled',
       unknown: "We couldn't check this",
       checking: 'Checking...',
       checkPermission: 'Check again',
       openSettings: 'Open Mac Settings',
-      instructions: 'How to give RSync permission:',
-      step1: '1. Click the blue \"Open Mac Settings\" button below',
-      step2: '2. Look for \"RSync\" in the list of apps',
-      step3: '3. Turn the switch ON (it should turn blue/green)',
-      step4: '4. You may need to close and reopen RSync',
+      instructions: 'To enable Full Disk Access:',
+      step1: '1. Click "Open Mac Settings" below',
+      step2: '2. Find "RSync" in the list',
+      step3: '3. Turn the switch ON',
+      step4: '4. Restart RSync if needed',
+      protectedFolders: 'Protected folders include: Mail, Messages, Safari, Time Machine backups',
     },
     nl: {
-      title: 'Toegang tot bestanden',
-      description: 'RSync heeft je toestemming nodig om bestanden op je Mac te lezen en te kopi\u00ebren. Zonder dit kan de app je bestanden niet zien.',
+      title: 'Volledige schijftoegang',
+      description: 'Alleen nodig als je systeembeveiligde mappen wilt synchroniseren zoals Mail, Berichten of Safari-gegevens. Voor normale mappen kun je dit overslaan.',
       fullDiskAccess: 'Volledige schijftoegang',
       granted: 'Toegestaan ✓',
-      denied: 'Nog niet toegestaan',
+      denied: 'Niet ingeschakeld',
       unknown: 'We konden dit niet controleren',
       checking: 'Controleren...',
       checkPermission: 'Opnieuw controleren',
       openSettings: 'Open Mac Instellingen',
-      instructions: 'Hoe geef je RSync toestemming:',
-      step1: '1. Klik op de blauwe \"Open Mac Instellingen\" knop hieronder',
-      step2: '2. Zoek \"RSync\" in de lijst met apps',
-      step3: '3. Zet de schakelaar AAN (hij wordt blauw/groen)',
-      step4: '4. Mogelijk moet je RSync sluiten en opnieuw openen',
+      instructions: 'Om Volledige schijftoegang in te schakelen:',
+      step1: '1. Klik op "Open Mac Instellingen" hieronder',
+      step2: '2. Zoek "RSync" in de lijst',
+      step3: '3. Zet de schakelaar AAN',
+      step4: '4. Herstart RSync indien nodig',
+      protectedFolders: 'Beveiligde mappen zijn: Mail, Berichten, Safari, Time Machine-backups',
     },
   };
 
   const t = texts[language];
 
   const checkFullDiskAccess = async () => {
+    if (isChecking) return;
+    
     setIsChecking(true);
     setFdaStatus('checking');
+    
+    // Small delay to show the checking state visually
+    await new Promise(resolve => setTimeout(resolve, 800));
     
     try {
       const hasAccess = await invoke<boolean>('check_fda');
@@ -60,7 +67,6 @@ export function PermissionsPanel() {
       setFdaStatus(hasAccess ? 'granted' : 'denied');
     } catch (error) {
       console.error('Failed to check FDA status:', error);
-      // If we can't check, assume we need to show the setup instructions
       setFdaStatus('denied');
     } finally {
       setIsChecking(false);
@@ -161,17 +167,20 @@ export function PermissionsPanel() {
           <Button
             variant="secondary"
             size="md"
-            onClick={checkFullDiskAccess}
+            onClick={fdaStatus === 'granted' ? openSystemPreferences : checkFullDiskAccess}
             disabled={isChecking}
             leftIcon={<RefreshCw className={clsx('w-4.5 h-4.5', isChecking && 'animate-spin')} />}
           >
-            {t.checkPermission}
+            {fdaStatus === 'granted' ? t.revokePermission : t.checkPermission}
           </Button>
         </div>
 
-        {/* Instructions if not granted */}
-        {fdaStatus === 'denied' && (
+        {/* Instructions if not granted - keep visible during checking to prevent layout shift */}
+        {(fdaStatus === 'denied' || fdaStatus === 'checking') && (
           <div className="space-y-4">
+            <p className="text-[13px] text-text-tertiary italic">
+              {t.protectedFolders}
+            </p>
             <p className="text-[15px] font-medium text-text-primary">
               {t.instructions}
             </p>
@@ -184,6 +193,7 @@ export function PermissionsPanel() {
             <Button
               variant="primary"
               onClick={openSystemPreferences}
+              disabled={isChecking}
               leftIcon={<ExternalLink className="w-4.5 h-4.5" />}
             >
               {t.openSettings}

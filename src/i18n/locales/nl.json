@@ -21,6 +21,33 @@
     "resume": "Hervatten",
     "cancel": "Annuleren"
   },
+  "queue": {
+    "title": "Overdrachtswachtrij",
+    "empty": "Geen overdrachten in wachtrij",
+    "emptySubtitle": "Voeg overdrachten toe om ze in de wachtrij te plaatsen",
+    "pending": "Wachtend",
+    "running": "Actief",
+    "completed": "Voltooid",
+    "failed": "Mislukt",
+    "cancelled": "Geannuleerd",
+    "addToQueue": "Toevoegen aan wachtrij",
+    "startQueue": "Wachtrij starten",
+    "clearCompleted": "Voltooide wissen",
+    "remove": "Verwijderen",
+    "transfersInQueue": "{{count}} overdracht(en) in wachtrij",
+    "currentTransfer": "Huidige overdracht",
+    "upNext": "Volgende",
+    "completedTransfers": "Voltooid",
+    "noMorePending": "Geen wachtende overdrachten meer"
+  },
+  "sourceMissing": {
+    "title": "Bronmap niet gevonden",
+    "message": "De bronmap voor deze overdracht bestaat niet meer of is verplaatst.",
+    "path": "Pad",
+    "destination": "Bestemming",
+    "removeFromQueue": "Verwijderen uit wachtrij",
+    "retryLater": "Later opnieuw proberen"
+  },
   "options": {
     "title": "Synchronisatieopties",
     "mode": "Modus",

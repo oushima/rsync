@@ -1,5 +1,6 @@
+import { useState, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { Play, Pause, Square, RotateCcw, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
+import { Play, Pause, Square, RotateCcw, CheckCircle2, XCircle, Loader2, ListPlus } from 'lucide-react';
 import clsx from 'clsx';
 import { useSyncStore } from '../../stores/syncStore';
 import { useSync } from '../../hooks/useSync';
@@ -7,12 +8,27 @@ import { useTransferState } from '../../hooks/useTransferState';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { Button } from '../ui/Button';
 import { ProgressBar } from '../ui/ProgressBar';
+import { Modal } from '../ui/Modal';
 
 export function TransferProgress() {
-  const { syncState, transferStats } = useSyncStore();
-  const { startSync, pauseSync, resumeSync, cancelSync, reset, formatBytes, formatTime, canSync, isRunning, isPaused } = useSync();
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const { syncState, transferStats, sourcePath, destPath } = useSyncStore();
+  const { startSync, pauseSync, resumeSync, cancelSync, reset, formatBytes, formatTime, canSync, isRunning, isPaused, queueTransfer } = useSync();
   const { progressPercentage, elapsedTime } = useTransferState();
-  const { language } = useSettingsStore();
+  const { language, confirmBeforeSync } = useSettingsStore();
+
+  const handleStartClick = useCallback(() => {
+    if (confirmBeforeSync) {
+      setShowConfirmModal(true);
+    } else {
+      startSync();
+    }
+  }, [confirmBeforeSync, startSync]);
+
+  const handleConfirmStart = useCallback(() => {
+    setShowConfirmModal(false);
+    startSync();
+  }, [startSync]);
 
   const texts = {
     en: {
@@ -31,6 +47,7 @@ export function TransferProgress() {
       error: 'Something went wrong',
       errorDesc: 'The copy could not finish',
       start: 'Start copying',
+      addToQueue: 'Add to Queue',
       pause: 'Pause',
       resume: 'Resume',
       cancel: 'Stop',
@@ -40,6 +57,11 @@ export function TransferProgress() {
       remaining: 'Time left',
       files: 'Files',
       transferred: 'Copied',
+      currentFile: 'Copying now',
+      confirmTitle: 'Start copying?',
+      confirmMessage: 'This will copy files from the source to the destination folder.',
+      confirmYes: 'Yes, start copying',
+      confirmNo: 'Cancel',
     },
     nl: {
       ready: 'Klaar om mappen gelijk te maken',
@@ -57,6 +79,7 @@ export function TransferProgress() {
       error: 'Er ging iets mis',
       errorDesc: 'Het kopiëren kon niet afmaken',
       start: 'Start met kopiëren',
+      addToQueue: 'Toevoegen aan wachtrij',
       pause: 'Pauze',
       resume: 'Hervat',
       cancel: 'Stop',
@@ -66,6 +89,11 @@ export function TransferProgress() {
       remaining: 'Tijd over',
       files: 'Bestanden',
       transferred: 'Gekopieerd',
+      currentFile: 'Nu bezig met',
+      confirmTitle: 'Beginnen met kopiëren?',
+      confirmMessage: 'Dit kopieert bestanden van de bron naar de bestemmingsmap.',
+      confirmYes: 'Ja, begin met kopiëren',
+      confirmNo: 'Annuleren',
     },
   };
 
@@ -87,13 +115,29 @@ export function TransferProgress() {
 
   // Hide when idle
   if (syncState === 'idle') {
+    const handleAddToQueue = () => {
+      if (sourcePath && destPath) {
+        queueTransfer(sourcePath, destPath);
+      }
+    };
+
     return (
       <div className="rounded-3xl bg-bg-secondary border border-border-subtle shadow-xs p-6 sm:p-8">
-        <div className="flex items-center justify-center">
+        <div className="flex items-center justify-center gap-3">
+          <Button
+            variant="secondary"
+            size="md"
+            onClick={handleAddToQueue}
+            disabled={!canSync}
+            leftIcon={<ListPlus className="w-4 h-4" strokeWidth={1.75} />}
+            className="px-6"
+          >
+            {t.addToQueue}
+          </Button>
           <Button
             variant="primary"
             size="md"
-            onClick={startSync}
+            onClick={handleStartClick}
             disabled={!canSync}
             leftIcon={<Play className="w-4 h-4" strokeWidth={1.75} />}
             className="px-8"
@@ -101,6 +145,30 @@ export function TransferProgress() {
             {t.start}
           </Button>
         </div>
+
+        <Modal
+          isOpen={showConfirmModal}
+          onClose={() => setShowConfirmModal(false)}
+          title={t.confirmTitle}
+        >
+          <div className="space-y-6">
+            <p className="text-[15px] text-text-secondary">{t.confirmMessage}</p>
+            <div className="flex justify-end gap-3">
+              <Button
+                variant="ghost"
+                onClick={() => setShowConfirmModal(false)}
+              >
+                {t.confirmNo}
+              </Button>
+              <Button
+                variant="primary"
+                onClick={handleConfirmStart}
+              >
+                {t.confirmYes}
+              </Button>
+            </div>
+          </div>
+        </Modal>
       </div>
     );
   }
@@ -186,12 +254,38 @@ export function TransferProgress() {
 
         {/* Progress */}
         {(isRunning || isPaused) && (
-          <div className="space-y-8">
+          <div className="space-y-6">
+            {/* Current file(s) being transferred */}
+            {(transferStats.currentFiles?.length > 0 || transferStats.currentFile) && (
+              <div className="flex flex-col gap-2 px-4 py-3 rounded-2xl bg-bg-tertiary/50">
+                <span className="text-[13px] text-text-tertiary">{t.currentFile}:</span>
+                <div className="flex flex-col gap-1.5">
+                  {transferStats.currentFiles?.length > 0 ? (
+                    transferStats.currentFiles.map((file, index) => (
+                      <span 
+                        key={index}
+                        className="text-[14px] font-medium text-text-primary truncate"
+                        title={file}
+                      >
+                        {file.split(/[\/\\]/).pop() || file}
+                      </span>
+                    ))
+                  ) : transferStats.currentFile && (
+                    <span 
+                      className="text-[14px] font-medium text-text-primary truncate"
+                      title={transferStats.currentFile}
+                    >
+                      {transferStats.currentFile.split(/[\/\\]/).pop() || transferStats.currentFile}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+            
             <ProgressBar
               value={progressPercentage}
               size="lg"
               showValue
-              label={transferStats.currentFile || ''}
               animated
               striped={isPaused}
             />

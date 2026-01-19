@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use errors::SyncError;
-use file_ops::DirectoryInfo;
+use file_ops::{DirectoryInfo, VolumeInfo};
 use sync_engine::{SyncEngine, SyncOptions, SyncResult_};
 use transfer_state::TransferState;
 
@@ -189,6 +189,12 @@ fn is_preventing_sleep() -> bool {
     power::is_preventing_sleep()
 }
 
+#[tauri::command]
+fn get_volume_info(path: String) -> Result<VolumeInfo, String> {
+    file_ops::get_volume_info(std::path::Path::new(&path))
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_state = Arc::new(AppState::new());
@@ -220,6 +226,7 @@ pub fn run() {
             prevent_sleep,
             allow_sleep,
             is_preventing_sleep,
+            get_volume_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -66,10 +66,12 @@ export function SettingsPanel() {
     confirmBeforeSync,
     minimizeToTray,
     preventSleepDuringTransfer,
+    rememberLastDestination,
     setNotifications,
     setConfirmBeforeSync,
     setMinimizeToTray,
     setPreventSleepDuringTransfer,
+    setRememberLastDestination,
     resetToDefaults,
   } = useSettingsStore();
 
@@ -84,7 +86,7 @@ export function SettingsPanel() {
   const texts = {
     en: {
       appearance: 'How it looks',
-      behavior: 'How it works',
+      behavior: 'App behavior',
       notifications: 'Tell me when copying is done',
       notificationsDesc: 'Show a message when your files are finished copying',
       confirmSync: 'Ask me before starting',
@@ -93,6 +95,8 @@ export function SettingsPanel() {
       minimizeTrayDesc: 'The app stays open in the background (you can find it in your menu bar)',
       preventSleep: 'Keep my Mac awake during transfers',
       preventSleepDesc: 'Prevent your Mac from sleeping while files are being copied',
+      rememberDestination: 'Remember last destination',
+      rememberDestinationDesc: 'Automatically use the last destination folder when you start the app',
       syncOptions: 'Copying options',
       overwriteNewer: 'Replace newer files',
       overwriteNewerDesc: 'Copy over files even if the destination has a newer version',
@@ -108,6 +112,9 @@ export function SettingsPanel() {
       followSymlinksDesc: 'When copying a shortcut, copy the actual file it points to',
       dryRun: 'Preview only (don\'t actually copy)',
       dryRunDesc: 'See what would happen without actually copying any files',
+      performance: 'Performance',
+      concurrentFiles: 'Parallel file transfers',
+      concurrentFilesDesc: 'Copy multiple files at once (best for SSDs and network drives)',
       permissions: 'App permissions',
       reset: 'Start fresh',
       resetDesc: 'Put all settings back to how they were when you first installed the app',
@@ -118,7 +125,7 @@ export function SettingsPanel() {
     },
     nl: {
       appearance: 'Hoe het eruitziet',
-      behavior: 'Hoe het werkt',
+      behavior: 'App gedrag',
       notifications: 'Laat me weten wanneer kopiëren klaar is',
       notificationsDesc: 'Toon een bericht wanneer je bestanden klaar zijn met kopiëren',
       confirmSync: 'Vraag me voordat je begint',
@@ -127,6 +134,8 @@ export function SettingsPanel() {
       minimizeTrayDesc: 'De app blijft open op de achtergrond (je vindt hem in je menubalk)',
       preventSleep: 'Houd mijn Mac wakker tijdens transfers',
       preventSleepDesc: 'Voorkom dat je Mac in slaapstand gaat terwijl bestanden worden gekopieerd',
+      rememberDestination: 'Onthoud laatste bestemming',
+      rememberDestinationDesc: 'Gebruik automatisch de laatste bestemmingsmap wanneer je de app start',
       syncOptions: 'Kopieeropties',
       overwriteNewer: 'Nieuwere bestanden vervangen',
       overwriteNewerDesc: 'Kopieer over bestanden zelfs als de bestemming een nieuwere versie heeft',
@@ -142,6 +151,9 @@ export function SettingsPanel() {
       followSymlinksDesc: 'Bij het kopiëren van een snelkoppeling, kopieer het echte bestand waar het naar wijst',
       dryRun: 'Alleen bekijken (niet echt kopiëren)',
       dryRunDesc: 'Zie wat er zou gebeuren zonder daadwerkelijk bestanden te kopiëren',
+      performance: 'Prestaties',
+      concurrentFiles: 'Parallelle bestandsoverdracht',
+      concurrentFilesDesc: 'Kopieer meerdere bestanden tegelijk (beste voor SSDs en netwerk schijven)',
       permissions: 'App-rechten',
       reset: 'Opnieuw beginnen',
       resetDesc: 'Zet alle instellingen terug naar hoe ze waren toen je de app installeerde',
@@ -165,7 +177,7 @@ export function SettingsPanel() {
   ];
 
   return (
-    <div className="flex flex-col gap-8 max-w-3xl">
+    <div className="flex flex-col gap-8 max-w-4xl mx-auto w-full">
       {/* Appearance Section */}
       <Card variant="default" padding="lg">
         <div className="flex flex-col gap-6">
@@ -192,6 +204,40 @@ export function SettingsPanel() {
               onChange={(e) => updateSyncOptions({ [option.key]: e.target.checked })}
             />
           ))}
+        </div>
+      </Card>
+
+      {/* Performance Section */}
+      <Card variant="default" padding="lg">
+        <div className="flex flex-col gap-4">
+          <h2 className="text-lg font-semibold text-text-primary">
+            {t.performance}
+          </h2>
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-[15px] font-medium text-text-primary">
+                  {t.concurrentFiles}
+                </p>
+                <p className="text-[13px] text-text-secondary">
+                  {t.concurrentFilesDesc}
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min="1"
+                  max="8"
+                  value={syncOptions.maxConcurrentFiles}
+                  onChange={(e) => updateSyncOptions({ maxConcurrentFiles: parseInt(e.target.value) })}
+                  className="w-24 h-2 bg-bg-tertiary rounded-lg appearance-none cursor-pointer accent-accent"
+                />
+                <span className="text-[15px] font-medium text-text-primary w-6 text-center">
+                  {syncOptions.maxConcurrentFiles}
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
       </Card>
 
@@ -224,6 +270,12 @@ export function SettingsPanel() {
             description={t.preventSleepDesc}
             checked={preventSleepDuringTransfer}
             onChange={(e) => setPreventSleepDuringTransfer(e.target.checked)}
+          />
+          <Toggle
+            label={t.rememberDestination}
+            description={t.rememberDestinationDesc}
+            checked={rememberLastDestination}
+            onChange={(e) => setRememberLastDestination(e.target.checked)}
           />
         </div>
       </Card>

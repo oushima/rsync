@@ -2,13 +2,15 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useSyncStore } from './stores/syncStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { useTheme } from './hooks/useTheme';
+import { useSync } from './hooks/useSync';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { DropZone } from './components/sync/DropZone';
 import { FileList } from './components/sync/FileList';
 import { OutputSelector } from './components/sync/OutputSelector';
 import { TransferProgress } from './components/sync/TransferProgress';
-
+import { TransferQueue } from './components/sync/TransferQueue';
+import { SourceMissingModal } from './components/sync/SourceMissingModal';
 import { ConflictDialog } from './components/sync/ConflictDialog';
 import { HistoryPanel } from './components/sync/HistoryPanel';
 import { SettingsPanel } from './components/settings/SettingsPanel';
@@ -16,17 +18,20 @@ import { SettingsPanel } from './components/settings/SettingsPanel';
 function SyncPage() {
   return (
     <div className="flex flex-col gap-8 h-full">
-      {/* Drop zone for adding files */}
-      <DropZone />
+      {/* Source and Destination zones side by side */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6">
+        <DropZone />
+        <OutputSelector />
+      </div>
       
       {/* File list */}
       <FileList />
 
-      {/* Output destination selector */}
-      <OutputSelector />
-
       {/* Progress at bottom */}
       <TransferProgress />
+
+      {/* Transfer Queue */}
+      <TransferQueue />
     </div>
   );
 }
@@ -34,6 +39,11 @@ function SyncPage() {
 function App() {
   const { currentPage } = useSyncStore();
   const { language } = useSettingsStore();
+  const { 
+    sourceMissingError, 
+    handleRemoveErroredFromQueue, 
+    handleRetryLater 
+  } = useSync();
   
   // Initialize theme
   useTheme();
@@ -77,6 +87,14 @@ function App() {
 
         {/* Conflict Dialog */}
         <ConflictDialog />
+
+        {/* Source Missing Error Modal */}
+        <SourceMissingModal
+          isOpen={sourceMissingError.isOpen}
+          queueItem={sourceMissingError.queueItem}
+          onRemove={handleRemoveErroredFromQueue}
+          onRetryLater={handleRetryLater}
+        />
     </div>
   );
 }

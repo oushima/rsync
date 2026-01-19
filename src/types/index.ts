@@ -30,6 +30,7 @@ export interface SyncOptions {
   verifyChecksum: 'off' | 'during' | 'after' | 'both';
   autoRepair: boolean;
   shutdownAfterComplete: boolean;
+  maxConcurrentFiles: number; // 1-8, for parallel file transfers
 }
 
 export interface TransferStats {
@@ -42,6 +43,7 @@ export interface TransferStats {
   startTime: Date | null;
   estimatedTimeRemaining: number | null; // seconds
   currentFile: string | null;
+  currentFiles: string[]; // For parallel transfers - multiple files being copied
 }
 
 export interface ConflictInfo {
@@ -82,6 +84,8 @@ export interface Settings {
   notifications: boolean;
   confirmBeforeSync: boolean;
   preventSleepDuringTransfer: boolean;
+  rememberLastDestination: boolean;
+  lastDestinationPath: string | null;
   defaultSyncOptions: SyncOptions;
 }
 
@@ -94,6 +98,33 @@ export type SyncState =
   | 'completed'
   | 'error'
   | 'cancelled';
+
+// Transfer Queue
+export type TransferQueueStatus = 'pending' | 'running' | 'completed' | 'error' | 'cancelled';
+
+export interface TransferQueueItem {
+  id: string;
+  sourcePath: string;
+  destPath: string;
+  status: TransferQueueStatus;
+  error?: string;
+  addedAt: Date;
+  startedAt?: Date;
+  completedAt?: Date;
+}
+
+// Volume/Drive Info
+export interface VolumeInfo {
+  name: string;
+  mount_point: string;
+  is_external: boolean;
+  is_removable: boolean;
+  drive_type: 'SSD' | 'HDD' | 'Network' | 'Unknown';
+  manufacturer: string | null;
+  model: string | null;
+  total_space: number;
+  available_space: number;
+}
 
 // Navigation
 export type NavigationPage = 'sync' | 'history' | 'settings';

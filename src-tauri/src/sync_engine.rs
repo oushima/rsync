@@ -4,14 +4,15 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
+use tokio::sync::Semaphore;
 use walkdir::WalkDir;
 
 use crate::errors::{SyncError, SyncResult};
 use crate::file_ops::{
-    copy_file_with_progress, copy_symlink, detect_delta, generate_conflict_name, 
+    copy_file_with_progress, copy_symlink, detect_delta_detailed, generate_conflict_name, 
     scan_directory_with_options, CopyOptions, DeltaStatus, DirectoryInfo, FileInfo,
 };
 use crate::transfer_state::{
@@ -48,6 +49,22 @@ pub struct SyncOptions {
     pub dry_run: bool,
     #[serde(default)]
     pub follow_symlinks: bool,
+    /// Maximum number of files to copy in parallel (1-8)
+    #[serde(default = "default_max_concurrent_files")]
+    pub max_concurrent_files: usize,
+    /// Only copy if source is newer than destination
+    #[serde(default)]
+    pub overwrite_newer: bool,
+    /// Only copy if source is older than destination
+    #[serde(default)]
+    pub overwrite_older: bool,
+    /// Skip files that already exist at destination
+    #[serde(default)]
+    pub skip_existing: bool,
+}
+
+fn default_max_concurrent_files() -> usize {
+    4
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,7 +243,23 @@ impl SyncEngine {
 
         self.emit_initial_progress(&transfer_id, &source_info);
 
+        // Separate directories, symlinks, and regular files
+        let mut dirs: Vec<&FileInfo> = Vec::new();
+        let mut symlinks: Vec<&FileInfo> = Vec::new();
+        let mut regular_files: Vec<&FileInfo> = Vec::new();
+
         for file in &source_info.files {
+            if file.is_dir {
+                dirs.push(file);
+            } else if file.is_symlink && !options.follow_symlinks {
+                symlinks.push(file);
+            } else {
+                regular_files.push(file);
+            }
+        }
+
+        // Create directories first (must be sequential)
+        for file in dirs {
             if control.is_cancelled() {
                 self.set_status(
                     &transfer_id,
@@ -235,53 +268,130 @@ impl SyncEngine {
                 )?;
                 return Err(SyncError::TransferCancelled("Transfer cancelled by user".into()));
             }
+            if !options.dry_run {
+                self.create_directory(&dest_path, file)?;
+            }
+        }
 
+        // Copy symlinks (sequential, fast operation)
+        for file in symlinks {
+            if control.is_cancelled() {
+                self.set_status(
+                    &transfer_id,
+                    TransferStatus::Cancelled,
+                    Some("Transfer cancelled by user".to_string()),
+                )?;
+                return Err(SyncError::TransferCancelled("Transfer cancelled by user".into()));
+            }
+            if !options.dry_run {
+                let source_abs = source_path.join(&file.path);
+                let dest_abs = dest_path.join(&file.path);
+                match copy_symlink(&source_abs, &dest_abs, false) {
+                    Ok(_) => {
+                        result.files_copied += 1;
+                    }
+                    Err(e) => {
+                        result.files_failed += 1;
+                        result.errors.push(format!("{}: {}", file.path.display(), e));
+                    }
+                }
+            } else {
+                result.files_copied += 1;
+            }
+        }
+
+        // Process regular files in parallel using semaphore
+        let max_concurrent = options.max_concurrent_files.clamp(1, 8);
+        let semaphore = Arc::new(Semaphore::new(max_concurrent));
+        let files_copied = Arc::new(AtomicUsize::new(0));
+        let files_failed = Arc::new(AtomicUsize::new(0));
+        let bytes_copied_atomic = Arc::new(AtomicUsize::new(0));
+        let errors = Arc::new(parking_lot::Mutex::new(Vec::<String>::new()));
+
+        // Clone shared resources for tasks
+        let state_manager = self.state_manager.clone();
+        let app_handle = self.app_handle.clone();
+
+        let mut handles = Vec::new();
+
+        for file in regular_files {
+            // Check for cancellation before spawning
+            if control.is_cancelled() {
+                break;
+            }
+
+            // Wait for pause
             while control.is_paused() {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
 
-            if file.is_dir {
-                if !options.dry_run {
-                    self.create_directory(&dest_path, file)?;
-                }
-                continue;
-            }
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let transfer_id = transfer_id.clone();
+            let source_path = source_path.clone();
+            let dest_path = dest_path.clone();
+            let file = file.clone();
+            let options = options.clone();
+            let control = control.clone();
+            let files_copied = files_copied.clone();
+            let files_failed = files_failed.clone();
+            let bytes_copied_atomic = bytes_copied_atomic.clone();
+            let errors = errors.clone();
+            let state_manager = state_manager.clone();
+            let app_handle = app_handle.clone();
 
-            // Handle symlinks separately
-            if file.is_symlink && !options.follow_symlinks {
-                if !options.dry_run {
-                    let source_abs = source_path.join(&file.path);
-                    let dest_abs = dest_path.join(&file.path);
-                    match copy_symlink(&source_abs, &dest_abs, false) {
-                        Ok(_) => {
-                            result.files_copied += 1;
-                        }
-                        Err(e) => {
-                            result.files_failed += 1;
-                            result.errors.push(format!("{}: {}", file.path.display(), e));
+            let handle = tokio::spawn(async move {
+                let _permit = permit; // Hold permit until task completes
+
+                match Self::sync_file_static(
+                    &transfer_id,
+                    &source_path,
+                    &dest_path,
+                    &file,
+                    &options,
+                    &control,
+                    &state_manager,
+                    app_handle.as_ref(),
+                ).await
+                {
+                    Ok(bytes) => {
+                        files_copied.fetch_add(1, Ordering::Relaxed);
+                        bytes_copied_atomic.fetch_add(bytes as usize, Ordering::Relaxed);
+                    }
+                    Err(e) => {
+                        files_failed.fetch_add(1, Ordering::Relaxed);
+                        errors.lock().push(format!("{}: {}", file.path.display(), e));
+                        let source_abs = source_path.join(&file.path);
+                        if let Ok(state_arc) = state_manager.get_transfer(&transfer_id) {
+                            let mut state = state_arc.write();
+                            state.fail_file(&source_abs, e.to_string());
+                            let _ = state_manager.save_state(&state);
                         }
                     }
-                } else {
-                    result.files_copied += 1;
                 }
-                continue;
-            }
-
-            match self.sync_file(&transfer_id, &source_path, &dest_path, file, &options, &control)
-                .await
-            {
-                Ok(bytes) => {
-                    result.files_copied += 1;
-                    result.bytes_copied += bytes;
-                }
-                Err(e) => {
-                    result.files_failed += 1;
-                    result.errors.push(format!("{}: {}", file.path.display(), e));
-                    let source_abs = source_path.join(&file.path);
-                    let _ = self.set_file_failed(&transfer_id, &source_abs, e.to_string());
-                }
-            }
+            });
+            handles.push(handle);
         }
+
+        // Wait for all file transfers to complete
+        for handle in handles {
+            let _ = handle.await;
+        }
+
+        // Check if cancelled while processing
+        if control.is_cancelled() {
+            self.set_status(
+                &transfer_id,
+                TransferStatus::Cancelled,
+                Some("Transfer cancelled by user".to_string()),
+            )?;
+            return Err(SyncError::TransferCancelled("Transfer cancelled by user".into()));
+        }
+
+        // Collect results
+        result.files_copied += files_copied.load(Ordering::Relaxed);
+        result.files_failed += files_failed.load(Ordering::Relaxed);
+        result.bytes_copied += bytes_copied_atomic.load(Ordering::Relaxed) as u64;
+        result.errors.extend(errors.lock().drain(..));
 
         if options.delete_orphans && !options.dry_run {
             self.cleanup_orphans(&source_info, &dest_path)?;
@@ -341,74 +451,102 @@ impl SyncEngine {
         self.state_manager.save_state(&state)
     }
 
-    fn set_file_failed(
-        &self,
-        transfer_id: &str,
-        source_path: &Path,
-        error: String,
-    ) -> SyncResult<()> {
-        let state_arc = self.state_manager.get_transfer(transfer_id)?;
-        let mut state = state_arc.write();
-        state.fail_file(source_path, error);
-        self.state_manager.save_state(&state)
-    }
-
     fn create_directory(&self, dest_root: &Path, file: &FileInfo) -> SyncResult<()> {
         let dest_path = dest_root.join(&file.path);
         std::fs::create_dir_all(&dest_path)?;
         Ok(())
     }
 
-    async fn sync_file(
-        &self,
+    /// Static version of sync_file for parallel processing
+    async fn sync_file_static(
         transfer_id: &str,
         source_root: &Path,
         dest_root: &Path,
         file: &FileInfo,
         options: &SyncOptions,
         control: &Arc<TransferControl>,
+        state_manager: &Arc<TransferStateManager>,
+        app_handle: Option<&AppHandle>,
     ) -> SyncResult<u64> {
         let source_path = source_root.join(&file.path);
         let dest_path = dest_root.join(&file.path);
 
-        let delta = detect_delta(file, dest_root)?;
+        let delta = detect_delta_detailed(file, dest_root)?;
 
-        if delta == DeltaStatus::Unchanged {
-            let state_arc = self.state_manager.get_transfer(transfer_id)?;
+        // Handle unchanged files - always skip
+        if delta.status == DeltaStatus::Unchanged {
+            let state_arc = state_manager.get_transfer(transfer_id)?;
             let mut state = state_arc.write();
             state.skip_file(&source_path);
-            self.state_manager.save_state(&state)?;
+            state_manager.save_state(&state)?;
             return Ok(0);
         }
 
-        let actual_dest = if delta == DeltaStatus::Modified {
-            match options.conflict_resolution {
-                ConflictResolution::Skip | ConflictResolution::Ask => {
-                    let state_arc = self.state_manager.get_transfer(transfer_id)?;
-                    let mut state = state_arc.write();
-                    state.skip_file(&source_path);
-                    self.state_manager.save_state(&state)?;
-                    return Ok(0);
-                }
-                ConflictResolution::Rename => generate_conflict_name(&dest_path),
-                ConflictResolution::Overwrite => dest_path.clone(),
+        // Handle existing files based on overwrite options
+        if delta.status == DeltaStatus::Modified {
+            // If skip_existing is set, skip all existing files
+            if options.skip_existing {
+                let state_arc = state_manager.get_transfer(transfer_id)?;
+                let mut state = state_arc.write();
+                state.skip_file(&source_path);
+                state_manager.save_state(&state)?;
+                return Ok(0);
             }
+
+            // Check overwrite conditions
+            let should_overwrite = if options.overwrite_newer && options.overwrite_older {
+                true
+            } else if options.overwrite_newer {
+                delta.source_newer || delta.size_differs
+            } else if options.overwrite_older {
+                delta.source_older
+            } else {
+                match options.conflict_resolution {
+                    ConflictResolution::Skip | ConflictResolution::Ask => false,
+                    ConflictResolution::Overwrite | ConflictResolution::Rename => true,
+                }
+            };
+
+            if !should_overwrite {
+                let state_arc = state_manager.get_transfer(transfer_id)?;
+                let mut state = state_arc.write();
+                state.skip_file(&source_path);
+                state_manager.save_state(&state)?;
+                return Ok(0);
+            }
+        }
+
+        // Determine actual destination
+        let actual_dest = if delta.status == DeltaStatus::Modified 
+            && options.conflict_resolution == ConflictResolution::Rename 
+            && !options.overwrite_newer 
+            && !options.overwrite_older 
+        {
+            generate_conflict_name(&dest_path)
         } else {
             dest_path.clone()
         };
 
-        // In dry-run mode, just report what would be copied without actually copying
+        // In dry-run mode, just report what would be copied
         if options.dry_run {
-            let state_arc = self.state_manager.get_transfer(transfer_id)?;
+            let state_arc = state_manager.get_transfer(transfer_id)?;
             {
                 let mut state = state_arc.write();
                 state.complete_file(&source_path);
-                self.state_manager.save_state(&state)?;
+                state_manager.save_state(&state)?;
             }
             return Ok(file.size);
         }
 
-        let resume_offset = self.get_resume_offset(transfer_id, &source_path);
+        // Get resume offset
+        let resume_offset = {
+            if let Ok(state_arc) = state_manager.get_transfer(transfer_id) {
+                let state = state_arc.read();
+                state.files.get(&source_path).map(|f| f.get_resume_offset()).unwrap_or(0)
+            } else {
+                0
+            }
+        };
 
         let copy_options = CopyOptions {
             buffer_size: options.buffer_size.unwrap_or(8 * 1024 * 1024),
@@ -425,14 +563,14 @@ impl SyncEngine {
         let source_path_clone = source_path.clone();
         let source_path_for_task = source_path.clone();
         let actual_dest_for_task = actual_dest.clone();
-        let state_manager = self.state_manager.clone();
+        let state_manager_for_task = state_manager.clone();
         let control_clone = control.clone();
 
         let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<ProgressEvent>(64);
-        let app_handle = self.app_handle.clone();
+        let app_handle_owned = app_handle.cloned();
         
         let emit_task = tauri::async_runtime::spawn(async move {
-            if let Some(handle) = app_handle {
+            if let Some(handle) = app_handle_owned {
                 while let Some(event) = progress_rx.recv().await {
                     let _ = handle.emit("sync-progress", event);
                 }
@@ -441,7 +579,7 @@ impl SyncEngine {
             }
         });
 
-        // Run the blocking file copy in a separate thread to not block the async runtime
+        // Run the blocking file copy in a separate thread
         let bytes_copied = tokio::task::spawn_blocking(move || {
             copy_file_with_progress(
                 &source_path_for_task,
@@ -470,13 +608,13 @@ impl SyncEngine {
                         None
                     };
 
-                    if let Ok(state_arc) = state_manager.get_transfer(&transfer_id_for_cb) {
+                    if let Ok(state_arc) = state_manager_for_task.get_transfer(&transfer_id_for_cb) {
                         let mut state = state_arc.write();
                         state.status = TransferStatus::Running;
                         state.current_file = Some(source_path_clone.clone());
                         state.update_file_progress(&source_path_clone, copied, hash);
                         state.speed_bytes_per_sec = speed;
-                        let _ = state_manager.save_state(&state);
+                        let _ = state_manager_for_task.save_state(&state);
 
                         let overall_progress = if state.total_bytes > 0 {
                             state.bytes_transferred as f64 / state.total_bytes as f64
@@ -506,14 +644,13 @@ impl SyncEngine {
         .await
         .map_err(|e| SyncError::Internal(e.to_string()))??;
 
-        // progress_tx is already dropped (moved into blocking task), so emit_task will finish
         let _ = emit_task.await;
 
-        let state_arc = self.state_manager.get_transfer(&transfer_id_string)?;
+        let state_arc = state_manager.get_transfer(&transfer_id_string)?;
         {
             let mut state = state_arc.write();
             state.complete_file(&source_path);
-            self.state_manager.save_state(&state)?;
+            state_manager.save_state(&state)?;
         }
 
         if options.mode == SyncMode::Move {
@@ -521,16 +658,6 @@ impl SyncEngine {
         }
 
         Ok(bytes_copied.saturating_sub(resume_offset))
-    }
-
-    fn get_resume_offset(&self, transfer_id: &str, source_path: &Path) -> u64 {
-        if let Ok(state_arc) = self.state_manager.get_transfer(transfer_id) {
-            let state = state_arc.read();
-            if let Some(file_state) = state.files.get(source_path) {
-                return file_state.get_resume_offset();
-            }
-        }
-        0
     }
 
     fn emit_initial_progress(&self, transfer_id: &str, source_info: &DirectoryInfo) {

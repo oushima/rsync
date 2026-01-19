@@ -21,6 +21,33 @@
     "resume": "Resume",
     "cancel": "Cancel"
   },
+  "queue": {
+    "title": "Transfer Queue",
+    "empty": "No transfers in queue",
+    "emptySubtitle": "Add transfers to queue them up",
+    "pending": "Pending",
+    "running": "Running",
+    "completed": "Completed",
+    "failed": "Failed",
+    "cancelled": "Cancelled",
+    "addToQueue": "Add to Queue",
+    "startQueue": "Start Queue",
+    "clearCompleted": "Clear Completed",
+    "remove": "Remove",
+    "transfersInQueue": "{{count}} transfer(s) in queue",
+    "currentTransfer": "Current Transfer",
+    "upNext": "Up Next",
+    "completedTransfers": "Completed",
+    "noMorePending": "No more pending transfers"
+  },
+  "sourceMissing": {
+    "title": "Source Folder Not Found",
+    "message": "The source folder for this transfer no longer exists or has been moved.",
+    "path": "Path",
+    "destination": "Destination",
+    "removeFromQueue": "Remove from Queue",
+    "retryLater": "Retry Later"
+  },
   "options": {
     "title": "Sync Options",
     "mode": "Mode",
