@@ -13,6 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
+        "label": "main",
         "title": "RSync",
         "width": 1200,
         "height": 800,
@@ -32,6 +33,7 @@
     "active": true,
     "targets": "all",
     "icon": [
+      "icons/app-icon-generated.png",
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",

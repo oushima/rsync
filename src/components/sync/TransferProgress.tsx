@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
-import { Play, Pause, Square, RotateCcw, CheckCircle2, XCircle, Loader2, ListPlus } from 'lucide-react';
+import { Play, Pause, Square, RotateCcw, CheckCircle2, XCircle, Loader2, ListPlus, File } from 'lucide-react';
 import clsx from 'clsx';
 import { useSyncStore } from '../../stores/syncStore';
 import { useSync } from '../../hooks/useSync';
@@ -9,13 +10,15 @@ import { useSettingsStore } from '../../stores/settingsStore';
 import { Button } from '../ui/Button';
 import { ProgressBar } from '../ui/ProgressBar';
 import { Modal } from '../ui/Modal';
+import type { ActiveFileTransfer } from '../../types';
 
 export function TransferProgress() {
+  const { t } = useTranslation();
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const { syncState, transferStats, sourcePath, destPath } = useSyncStore();
   const { startSync, pauseSync, resumeSync, cancelSync, reset, formatBytes, formatTime, canSync, isRunning, isPaused, queueTransfer } = useSync();
   const { progressPercentage, elapsedTime } = useTransferState();
-  const { language, confirmBeforeSync } = useSettingsStore();
+  const { confirmBeforeSync } = useSettingsStore();
 
   const handleStartClick = useCallback(() => {
     if (confirmBeforeSync) {
@@ -30,83 +33,14 @@ export function TransferProgress() {
     startSync();
   }, [startSync]);
 
-  const texts = {
-    en: {
-      ready: 'Ready to make folders match',
-      readyDesc: 'Pick files and a destination to start',
-      preparing: 'Getting things ready...',
-      preparingDesc: 'Looking at your files',
-      syncing: 'Copying and matching',
-      syncingDesc: 'Moving files to the right place',
-      paused: 'Paused',
-      pausedDesc: 'Press resume to continue',
-      completed: 'All done',
-      completedDesc: 'Your folders match now',
-      cancelled: 'Stopped',
-      cancelledDesc: 'We stopped the copy',
-      error: 'Something went wrong',
-      errorDesc: 'The copy could not finish',
-      start: 'Start copying',
-      addToQueue: 'Add to Queue',
-      pause: 'Pause',
-      resume: 'Resume',
-      cancel: 'Stop',
-      reset: 'Start new sync',
-      speed: 'Speed',
-      elapsed: 'Time spent',
-      remaining: 'Time left',
-      files: 'Files',
-      transferred: 'Copied',
-      currentFile: 'Copying now',
-      confirmTitle: 'Start copying?',
-      confirmMessage: 'This will copy files from the source to the destination folder.',
-      confirmYes: 'Yes, start copying',
-      confirmNo: 'Cancel',
-    },
-    nl: {
-      ready: 'Klaar om mappen gelijk te maken',
-      readyDesc: 'Kies bestanden en een bestemming om te starten',
-      preparing: 'Even voorbereiden...',
-      preparingDesc: 'We kijken naar je bestanden',
-      syncing: 'Kopiëren en gelijkmaken',
-      syncingDesc: 'We zetten bestanden op de juiste plek',
-      paused: 'Gepauzeerd',
-      pausedDesc: 'Klik op hervatten om door te gaan',
-      completed: 'Helemaal klaar',
-      completedDesc: 'Je mappen zijn nu gelijk',
-      cancelled: 'Gestopt',
-      cancelledDesc: 'We hebben het kopiëren gestopt',
-      error: 'Er ging iets mis',
-      errorDesc: 'Het kopiëren kon niet afmaken',
-      start: 'Start met kopiëren',
-      addToQueue: 'Toevoegen aan wachtrij',
-      pause: 'Pauze',
-      resume: 'Hervat',
-      cancel: 'Stop',
-      reset: 'Nieuwe sync starten',
-      speed: 'Snelheid',
-      elapsed: 'Tijd bezig',
-      remaining: 'Tijd over',
-      files: 'Bestanden',
-      transferred: 'Gekopieerd',
-      currentFile: 'Nu bezig met',
-      confirmTitle: 'Beginnen met kopiëren?',
-      confirmMessage: 'Dit kopieert bestanden van de bron naar de bestemmingsmap.',
-      confirmYes: 'Ja, begin met kopiëren',
-      confirmNo: 'Annuleren',
-    },
-  };
-
-  const t = texts[language];
-
   const stateInfo = {
-    idle: { title: t.ready, desc: t.readyDesc, icon: Play, color: 'text-text-tertiary' },
-    preparing: { title: t.preparing, desc: t.preparingDesc, icon: Loader2, color: 'text-accent' },
-    syncing: { title: t.syncing, desc: t.syncingDesc, icon: Loader2, color: 'text-accent' },
-    paused: { title: t.paused, desc: t.pausedDesc, icon: Pause, color: 'text-warning' },
-    completed: { title: t.completed, desc: t.completedDesc, icon: CheckCircle2, color: 'text-success' },
-    cancelled: { title: t.cancelled, desc: t.cancelledDesc, icon: XCircle, color: 'text-text-tertiary' },
-    error: { title: t.error, desc: t.errorDesc, icon: XCircle, color: 'text-error' },
+    idle: { title: t('progress.ready'), desc: t('progress.readyDesc'), icon: Play, color: 'text-text-tertiary' },
+    preparing: { title: t('progress.preparing'), desc: t('progress.preparingDesc'), icon: Loader2, color: 'text-accent' },
+    syncing: { title: t('progress.syncing'), desc: t('progress.syncingDesc'), icon: Loader2, color: 'text-accent' },
+    paused: { title: t('progress.paused'), desc: t('progress.pausedDesc'), icon: Pause, color: 'text-warning' },
+    completed: { title: t('progress.completed'), desc: t('progress.completedDesc'), icon: CheckCircle2, color: 'text-success' },
+    cancelled: { title: t('progress.cancelled'), desc: t('progress.cancelledDesc'), icon: XCircle, color: 'text-text-tertiary' },
+    error: { title: t('progress.error'), desc: t('progress.errorDesc'), icon: XCircle, color: 'text-error' },
   };
 
   const currentState = stateInfo[syncState];
@@ -132,7 +66,7 @@ export function TransferProgress() {
             leftIcon={<ListPlus className="w-4 h-4" strokeWidth={1.75} />}
             className="px-6"
           >
-            {t.addToQueue}
+            {t('progress.addToQueue')}
           </Button>
           <Button
             variant="primary"
@@ -142,29 +76,29 @@ export function TransferProgress() {
             leftIcon={<Play className="w-4 h-4" strokeWidth={1.75} />}
             className="px-8"
           >
-            {t.start}
+            {t('progress.start')}
           </Button>
         </div>
 
         <Modal
           isOpen={showConfirmModal}
           onClose={() => setShowConfirmModal(false)}
-          title={t.confirmTitle}
+          title={t('progress.confirmTitle')}
         >
           <div className="space-y-6">
-            <p className="text-[15px] text-text-secondary">{t.confirmMessage}</p>
+            <p className="text-[15px] text-text-secondary">{t('progress.confirmMessage')}</p>
             <div className="flex justify-end gap-3">
               <Button
                 variant="ghost"
                 onClick={() => setShowConfirmModal(false)}
               >
-                {t.confirmNo}
+                {t('progress.confirmNo')}
               </Button>
               <Button
                 variant="primary"
                 onClick={handleConfirmStart}
               >
-                {t.confirmYes}
+                {t('progress.confirmYes')}
               </Button>
             </div>
           </div>
@@ -206,6 +140,7 @@ export function TransferProgress() {
                   size="md"
                   onClick={pauseSync}
                   className="px-4"
+                  aria-label={t('progress.pause')}
                 >
                   <Pause className="w-4.5 h-4.5" strokeWidth={1.75} />
                 </Button>
@@ -214,6 +149,7 @@ export function TransferProgress() {
                   size="md"
                   onClick={cancelSync}
                   className="px-4 text-error"
+                  aria-label={t('progress.cancel')}
                 >
                   <Square className="w-4.5 h-4.5" strokeWidth={1.75} />
                 </Button>
@@ -226,6 +162,7 @@ export function TransferProgress() {
                   size="md"
                   onClick={resumeSync}
                   className="px-4"
+                  aria-label={t('progress.resume')}
                 >
                   <Play className="w-4.5 h-4.5" strokeWidth={1.75} />
                 </Button>
@@ -234,6 +171,7 @@ export function TransferProgress() {
                   size="md"
                   onClick={cancelSync}
                   className="px-4 text-error"
+                  aria-label={t('progress.cancel')}
                 >
                   <Square className="w-4.5 h-4.5" strokeWidth={1.75} />
                 </Button>
@@ -246,7 +184,7 @@ export function TransferProgress() {
                 onClick={reset}
                 leftIcon={<RotateCcw className="w-4.5 h-4.5" strokeWidth={1.75} />}
               >
-                {t.reset}
+                {t('progress.reset')}
               </Button>
             )}
           </div>
@@ -255,10 +193,28 @@ export function TransferProgress() {
         {/* Progress */}
         {(isRunning || isPaused) && (
           <div className="space-y-6">
-            {/* Current file(s) being transferred */}
-            {(transferStats.currentFiles?.length > 0 || transferStats.currentFile) && (
+            {/* Individual File Transfers - Beautiful cards for parallel transfers */}
+            {transferStats.activeTransfers?.length > 1 && (
+              <div className="space-y-3">
+                <span className="text-[13px] font-medium text-text-tertiary">{t('progress.currentFile')}:</span>
+                <div className="grid gap-2">
+                  {transferStats.activeTransfers.map((transfer) => (
+                    <ActiveTransferCard
+                      key={transfer.id}
+                      transfer={transfer}
+                      formatBytes={formatBytes}
+                      isPaused={isPaused}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Single file display (when only 1 concurrent transfer) */}
+            {(!transferStats.activeTransfers || transferStats.activeTransfers.length <= 1) && 
+             (transferStats.currentFiles?.length > 0 || transferStats.currentFile) && (
               <div className="flex flex-col gap-2 px-4 py-3 rounded-2xl bg-bg-tertiary/50">
-                <span className="text-[13px] text-text-tertiary">{t.currentFile}:</span>
+                <span className="text-[13px] text-text-tertiary">{t('progress.currentFile')}:</span>
                 <div className="flex flex-col gap-1.5">
                   {transferStats.currentFiles?.length > 0 ? (
                     transferStats.currentFiles.map((file, index) => (
@@ -281,35 +237,43 @@ export function TransferProgress() {
                 </div>
               </div>
             )}
-            
-            <ProgressBar
-              value={progressPercentage}
-              size="lg"
-              showValue
-              animated
-              striped={isPaused}
-            />
+
+            {/* Overall Progress */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-[13px]">
+                <span className="text-text-tertiary">{t('progress.overallProgress')}</span>
+                <span className="font-medium text-text-primary tabular-nums">{Math.round(progressPercentage)}%</span>
+              </div>
+              <ProgressBar
+                value={progressPercentage}
+                size="lg"
+                showValue={false}
+                animated
+                striped={isPaused}
+                shimmer={!isPaused}
+              />
+            </div>
 
             {/* Stats - horizontal, compact */}
             <div className="flex flex-wrap items-center gap-6 text-[14px]">
               <StatItem
-                label={t.files}
+                label={t('progress.files')}
                 value={`${transferStats.completedFiles}/${transferStats.totalFiles}`}
               />
               <StatItem
-                label={t.transferred}
+                label={t('progress.transferred')}
                 value={formatBytes(transferStats.transferredBytes)}
               />
               <StatItem
-                label={t.speed}
+                label={t('progress.speed')}
                 value={`${formatBytes(transferStats.currentSpeed)}/s`}
               />
               <StatItem
-                label={t.elapsed}
+                label={t('progress.elapsed')}
                 value={formatTime(elapsedTime)}
               />
               <StatItem
-                label={t.remaining}
+                label={t('progress.remaining')}
                 value={transferStats.estimatedTimeRemaining ? formatTime(transferStats.estimatedTimeRemaining) : '--'}
               />
             </div>
@@ -320,15 +284,15 @@ export function TransferProgress() {
         {syncState === 'completed' && (
           <div className="flex items-center justify-center gap-10 text-[14px]">
             <StatItem
-              label={t.files}
+              label={t('progress.files')}
               value={`${transferStats.completedFiles}`}
             />
             <StatItem
-              label={t.transferred}
+              label={t('progress.transferred')}
               value={formatBytes(transferStats.transferredBytes)}
             />
             <StatItem
-              label={t.elapsed}
+              label={t('progress.elapsed')}
               value={formatTime(elapsedTime)}
             />
           </div>
@@ -344,5 +308,70 @@ function StatItem({ label, value }: { label: string; value: string }) {
       <span className="text-text-tertiary">{label}</span>
       <span className="font-medium text-text-primary tabular-nums">{value}</span>
     </div>
+  );
+}
+
+interface ActiveTransferCardProps {
+  transfer: ActiveFileTransfer;
+  formatBytes: (bytes: number) => string;
+  isPaused: boolean;
+}
+
+function ActiveTransferCard({ transfer, formatBytes, isPaused }: ActiveTransferCardProps) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 10 }}
+      className="relative overflow-hidden rounded-xl bg-bg-tertiary/60 border border-border-subtle"
+    >
+      {/* Background progress fill */}
+      <motion.div
+        className="absolute inset-0 bg-accent/10"
+        initial={{ width: '0%' }}
+        animate={{ width: `${transfer.progress}%` }}
+        transition={{ duration: 0.3, ease: 'easeOut' }}
+      />
+      
+      {/* Content */}
+      <div className="relative flex items-center gap-3 px-4 py-3">
+        {/* File Icon */}
+        <div className="shrink-0 w-8 h-8 rounded-lg bg-accent/15 flex items-center justify-center">
+          <File className="w-4 h-4 text-accent" strokeWidth={1.75} />
+        </div>
+        
+        {/* File Info */}
+        <div className="flex-1 min-w-0">
+          <p className="text-[13px] font-medium text-text-primary truncate" title={transfer.filePath}>
+            {transfer.fileName}
+          </p>
+          <div className="flex items-center gap-3 mt-0.5">
+            <span className="text-[11px] text-text-tertiary tabular-nums">
+              {formatBytes(transfer.transferredBytes)} / {formatBytes(transfer.size)}
+            </span>
+            {transfer.speed > 0 && !isPaused && (
+              <span className="text-[11px] text-accent tabular-nums">
+                {formatBytes(transfer.speed)}/s
+              </span>
+            )}
+          </div>
+        </div>
+        
+        {/* Progress Percentage */}
+        <div className="shrink-0 flex items-center gap-2">
+          <div className="w-12 h-1.5 rounded-full bg-bg-primary overflow-hidden">
+            <motion.div
+              className="h-full bg-accent rounded-full"
+              initial={{ width: '0%' }}
+              animate={{ width: `${transfer.progress}%` }}
+              transition={{ duration: 0.3, ease: 'easeOut' }}
+            />
+          </div>
+          <span className="text-[12px] font-medium text-text-secondary tabular-nums w-10 text-right">
+            {Math.round(transfer.progress)}%
+          </span>
+        </div>
+      </div>
+    </motion.div>
   );
 }

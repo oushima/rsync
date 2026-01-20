@@ -1,56 +1,18 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ShieldCheck, ShieldAlert, ExternalLink, RefreshCw } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import clsx from 'clsx';
-import { useSettingsStore } from '../../stores/settingsStore';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
+import { logger, withTimeout, TIMEOUTS } from '../../utils/logger';
 
 type PermissionStatus = 'unknown' | 'granted' | 'denied' | 'checking';
 
 export function PermissionsPanel() {
+  const { t } = useTranslation();
   const [fdaStatus, setFdaStatus] = useState<PermissionStatus>('unknown');
   const [isChecking, setIsChecking] = useState(false);
-  const { language } = useSettingsStore();
-
-  const texts = {
-    en: {
-      title: 'Full Disk Access',
-      description: 'Only needed if you want to sync system-protected folders like Mail, Messages, or Safari data. For regular folders, you can skip this.',
-      fullDiskAccess: 'Full Disk Access',
-      granted: 'Allowed ✓',
-      denied: 'Not enabled',
-      unknown: "We couldn't check this",
-      checking: 'Checking...',
-      checkPermission: 'Check again',
-      openSettings: 'Open Mac Settings',
-      instructions: 'To enable Full Disk Access:',
-      step1: '1. Click "Open Mac Settings" below',
-      step2: '2. Find "RSync" in the list',
-      step3: '3. Turn the switch ON',
-      step4: '4. Restart RSync if needed',
-      protectedFolders: 'Protected folders include: Mail, Messages, Safari, Time Machine backups',
-    },
-    nl: {
-      title: 'Volledige schijftoegang',
-      description: 'Alleen nodig als je systeembeveiligde mappen wilt synchroniseren zoals Mail, Berichten of Safari-gegevens. Voor normale mappen kun je dit overslaan.',
-      fullDiskAccess: 'Volledige schijftoegang',
-      granted: 'Toegestaan ✓',
-      denied: 'Niet ingeschakeld',
-      unknown: 'We konden dit niet controleren',
-      checking: 'Controleren...',
-      checkPermission: 'Opnieuw controleren',
-      openSettings: 'Open Mac Instellingen',
-      instructions: 'Om Volledige schijftoegang in te schakelen:',
-      step1: '1. Klik op "Open Mac Instellingen" hieronder',
-      step2: '2. Zoek "RSync" in de lijst',
-      step3: '3. Zet de schakelaar AAN',
-      step4: '4. Herstart RSync indien nodig',
-      protectedFolders: 'Beveiligde mappen zijn: Mail, Berichten, Safari, Time Machine-backups',
-    },
-  };
-
-  const t = texts[language];
 
   const checkFullDiskAccess = async () => {
     if (isChecking) return;
@@ -62,11 +24,15 @@ export function PermissionsPanel() {
     await new Promise(resolve => setTimeout(resolve, 800));
     
     try {
-      const hasAccess = await invoke<boolean>('check_fda');
-      console.log('FDA check result:', hasAccess);
+      const hasAccess = await withTimeout(
+        invoke<boolean>('check_fda'),
+        TIMEOUTS.QUICK,
+        'Check Full Disk Access'
+      );
+      logger.debug('FDA check result:', hasAccess);
       setFdaStatus(hasAccess ? 'granted' : 'denied');
     } catch (error) {
-      console.error('Failed to check FDA status:', error);
+      logger.error('Failed to check FDA status:', error);
       setFdaStatus('denied');
     } finally {
       setIsChecking(false);
@@ -80,8 +46,8 @@ export function PermissionsPanel() {
       console.error('Failed to open preferences via invoke:', error);
       // Fallback: try opening via URL
       try {
-        const { open } = await import('@tauri-apps/plugin-opener');
-        await open('x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles');
+        const { openUrl } = await import('@tauri-apps/plugin-opener');
+        await openUrl('x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles');
       } catch {
         // Final fallback - try shell opener
         console.error('All methods to open settings failed');
@@ -98,25 +64,25 @@ export function PermissionsPanel() {
       icon: ShieldCheck,
       color: 'text-success',
       bg: 'bg-success/10',
-      label: t.granted,
+      label: t('permissions.granted'),
     },
     denied: {
       icon: ShieldAlert,
       color: 'text-error',
       bg: 'bg-error/10',
-      label: t.denied,
+      label: t('permissions.denied'),
     },
     unknown: {
       icon: ShieldAlert,
       color: 'text-warning',
       bg: 'bg-warning/10',
-      label: t.unknown,
+      label: t('permissions.unknown'),
     },
     checking: {
       icon: RefreshCw,
       color: 'text-text-tertiary',
       bg: 'bg-bg-tertiary',
-      label: t.checking,
+      label: t('permissions.checking'),
     },
   };
 
@@ -128,10 +94,10 @@ export function PermissionsPanel() {
       <div className="flex flex-col gap-6">
         <div>
           <h3 className="text-[18px] font-semibold text-text-primary">
-            {t.title}
+            {t('permissions.title')}
           </h3>
           <p className="text-[14px] text-text-secondary mt-1">
-            {t.description}
+            {t('permissions.description')}
           </p>
         </div>
 
@@ -158,7 +124,7 @@ export function PermissionsPanel() {
           </div>
           <div className="flex-1">
             <p className="text-[15px] font-medium text-text-primary">
-              {t.fullDiskAccess}
+              {t('permissions.fullDiskAccess')}
             </p>
             <p className={clsx('text-[14px] font-medium', status.color)}>
               {status.label}
@@ -171,7 +137,7 @@ export function PermissionsPanel() {
             disabled={isChecking}
             leftIcon={<RefreshCw className={clsx('w-4.5 h-4.5', isChecking && 'animate-spin')} />}
           >
-            {fdaStatus === 'granted' ? t.revokePermission : t.checkPermission}
+            {fdaStatus === 'granted' ? t('permissions.revokePermission') : t('permissions.checkPermission')}
           </Button>
         </div>
 
@@ -179,16 +145,16 @@ export function PermissionsPanel() {
         {(fdaStatus === 'denied' || fdaStatus === 'checking') && (
           <div className="space-y-4">
             <p className="text-[13px] text-text-tertiary italic">
-              {t.protectedFolders}
+              {t('permissions.protectedFolders')}
             </p>
             <p className="text-[15px] font-medium text-text-primary">
-              {t.instructions}
+              {t('permissions.instructions')}
             </p>
             <ol className="space-y-2 text-[14px] text-text-secondary">
-              <li>{t.step1}</li>
-              <li>{t.step2}</li>
-              <li>{t.step3}</li>
-              <li>{t.step4}</li>
+              <li>{t('permissions.step1')}</li>
+              <li>{t('permissions.step2')}</li>
+              <li>{t('permissions.step3')}</li>
+              <li>{t('permissions.step4')}</li>
             </ol>
             <Button
               variant="primary"
@@ -196,7 +162,7 @@ export function PermissionsPanel() {
               disabled={isChecking}
               leftIcon={<ExternalLink className="w-4.5 h-4.5" />}
             >
-              {t.openSettings}
+              {t('permissions.openSettings')}
             </Button>
           </div>
         )}

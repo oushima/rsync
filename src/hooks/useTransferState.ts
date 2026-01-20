@@ -1,5 +1,7 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { useSyncStore } from '../stores/syncStore';
+import { getActiveTransfers, getTransferState, isTauriApp } from '../utils/tauriCommands';
+import type { TransferState } from '../types';
 
 export function useTransferState() {
   const {
@@ -84,5 +86,101 @@ export function useTransferState() {
     isTransferring: syncState === 'syncing',
     isPaused: syncState === 'paused',
     isComplete: syncState === 'completed',
+  };
+}
+
+/**
+ * Hook for polling backend transfer state.
+ * 
+ * This provides an alternative to the event-based updates for scenarios where:
+ * - Components mount after a transfer is already in progress
+ * - Need to verify UI state matches backend state
+ * - Want to display multiple active transfers from the sync engine
+ * 
+ * @param options Configuration options
+ * @returns Active transfers from the backend
+ */
+export function useBackendTransferState(options: {
+  /** Whether polling is enabled (default: true when syncing) */
+  enabled?: boolean;
+  /** Polling interval in ms (default: 1000) */
+  intervalMs?: number;
+} = {}) {
+  const { syncState, transferId } = useSyncStore();
+  const { enabled = syncState === 'syncing', intervalMs = 1000 } = options;
+  
+  const [activeTransfers, setActiveTransfers] = useState<TransferState[]>([]);
+  const [currentTransfer, setCurrentTransfer] = useState<TransferState | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  // Fetch all active transfers
+  const fetchActiveTransfers = useCallback(async () => {
+    if (!isTauriApp()) return;
+    
+    try {
+      const transfers = await getActiveTransfers();
+      setActiveTransfers(transfers);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error(String(err)));
+    }
+  }, []);
+
+  // Fetch specific transfer by ID
+  const fetchTransferState = useCallback(async (id: string) => {
+    if (!isTauriApp()) return null;
+    
+    try {
+      const state = await getTransferState(id);
+      return state;
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error(String(err)));
+      return null;
+    }
+  }, []);
+
+  // Poll for active transfers when enabled
+  useEffect(() => {
+    if (!enabled || !isTauriApp()) {
+      setActiveTransfers([]);
+      return;
+    }
+
+    setIsLoading(true);
+    fetchActiveTransfers().finally(() => setIsLoading(false));
+
+    const intervalId = setInterval(fetchActiveTransfers, intervalMs);
+    return () => clearInterval(intervalId);
+  }, [enabled, intervalMs, fetchActiveTransfers]);
+
+  // Fetch current transfer state when transferId changes
+  useEffect(() => {
+    if (!transferId || !isTauriApp()) {
+      setCurrentTransfer(null);
+      return;
+    }
+
+    const fetchCurrent = async () => {
+      const state = await fetchTransferState(transferId);
+      setCurrentTransfer(state);
+    };
+
+    fetchCurrent();
+  }, [transferId, fetchTransferState]);
+
+  return {
+    /** All active transfers from the backend */
+    activeTransfers,
+    /** Current transfer state (if transferId is set) */
+    currentTransfer,
+    /** Whether initial load is in progress */
+    isLoading,
+    /** Last error encountered */
+    error,
+    /** Manually refresh active transfers */
+    refresh: fetchActiveTransfers,
+    /** Fetch a specific transfer's state */
+    getTransfer: fetchTransferState,
   };
 }

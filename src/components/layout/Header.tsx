@@ -1,10 +1,13 @@
-import { Sun, Moon, Monitor, Smartphone, Globe, FolderSync, History, Settings } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Sun, Moon, Monitor, Smartphone, Globe, FolderSync, History, Settings, Coffee } from 'lucide-react';
 import clsx from 'clsx';
 import { useTheme } from '../../hooks/useTheme';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { useSyncStore } from '../../stores/syncStore';
 import { Button } from '../ui/Button';
 import { Tooltip } from '../ui/Tooltip';
+import { pollSleepStatus, isTauriApp } from '../../utils/tauriCommands';
+import { NotificationBell } from '../notifications/NotificationCenter';
 import type { ThemeMode } from '../../types';
 
 const themeIcons: Record<ThemeMode, typeof Sun> = {
@@ -29,7 +32,29 @@ const languageLabels = {
 export function Header() {
   const { theme, toggleTheme } = useTheme();
   const { language, setLanguage } = useSettingsStore();
-  const { currentPage, setCurrentPage } = useSyncStore();
+  const { currentPage, setCurrentPage, syncState } = useSyncStore();
+  const [isPreventingSleep, setIsPreventingSleep] = useState(false);
+
+  // Poll sleep prevention status when sync is active
+  useEffect(() => {
+    if (!isTauriApp()) return;
+    
+    // Only poll when syncing is active
+    const isActive = syncState === 'syncing' || syncState === 'preparing';
+    if (!isActive) {
+      setIsPreventingSleep(false);
+      return;
+    }
+
+    const stopPolling = pollSleepStatus({
+      intervalMs: 2000,
+      onStatusChange: setIsPreventingSleep,
+    });
+
+    return () => {
+      stopPolling();
+    };
+  }, [syncState]);
 
   const ThemeIcon = themeIcons[theme];
   const themeLabel = themeLabels[theme][language];
@@ -60,6 +85,21 @@ export function Header() {
 
         {/* Actions - Minimal and unobtrusive */}
         <div className="flex items-center gap-2">
+          {/* Sleep Prevention Indicator */}
+          {isPreventingSleep && (
+            <Tooltip
+              content={language === 'en' ? 'Keeping system awake during transfer' : 'Systeem blijft wakker tijdens overdracht'}
+              position="bottom"
+            >
+              <div className="flex items-center gap-1.5 px-3 h-9 rounded-full bg-warning/10 text-warning">
+                <Coffee className="w-4 h-4" strokeWidth={1.75} />
+                <span className="text-xs font-medium hidden sm:inline">
+                  {language === 'en' ? 'Awake' : 'Wakker'}
+                </span>
+              </div>
+            </Tooltip>
+          )}
+
           {/* Language Toggle */}
           <Tooltip
             content={language === 'en' ? 'Use Dutch' : 'Use English'}
@@ -87,6 +127,9 @@ export function Header() {
               <ThemeIcon className="w-4 h-4" strokeWidth={1.75} />
             </Button>
           </Tooltip>
+
+          {/* Notification Bell */}
+          <NotificationBell />
         </div>
       </div>
 

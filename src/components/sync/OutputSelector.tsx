@@ -1,11 +1,12 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Download, FolderOpen, X, HardDrive, Loader2 } from 'lucide-react';
+import { Download, FolderOpen, X, HardDrive, Loader2, Clock, ChevronDown, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useSyncStore } from '../../stores/syncStore';
 import { useSync } from '../../hooks/useSync';
+import { useDropZone } from '../../hooks/useDragDrop';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { Button } from '../ui/Button';
 import type { VolumeInfo } from '../../types';
@@ -20,109 +21,102 @@ function formatBytes(bytes: number): string {
 }
 
 export function OutputSelector() {
-  const dropZoneRef = useRef<HTMLDivElement>(null);
+  const { t } = useTranslation();
+  const [isLoading, setIsLoading] = useState(false);
   const [isLoadingVolume, setIsLoadingVolume] = useState(false);
+  const [showRecent, setShowRecent] = useState(false);
+  const recentDropdownRef = useRef<HTMLDivElement>(null);
   const { 
-    destPath, setDestPath, destVolumeInfo, setDestVolumeInfo,
-    isDraggingFiles, dragOverZone, setIsDraggingFiles, setDragOverZone
+    destPath, setDestPath, destVolumeInfo, setDestVolumeInfo
   } = useSyncStore();
   const { selectDestFolder } = useSync();
-  const { language, rememberLastDestination, lastDestinationPath, setLastDestinationPath } = useSettingsStore();
+  const { 
+    rememberLastDestination, 
+    lastDestinationPath, 
+    setLastDestinationPath,
+    recentDestinations,
+    addRecentDestination,
+    clearRecentDestinations
+  } = useSettingsStore();
 
-  const isHoveredHere = isDraggingFiles && dragOverZone === 'destination';
-  const isHoveredElsewhere = isDraggingFiles && dragOverZone !== 'destination';
+  // Handle drop for this zone
+  const handleDrop = useCallback(async (paths: string[]) => {
+    if (paths.length === 0) return;
+    
+    const firstPath = paths[0];
+    setIsLoading(true);
+    setDestPath(firstPath);
+    
+    try {
+      await invoke('get_directory_info', { path: firstPath });
+      // Success - it's a directory, path already set
+    } catch {
+      // Not a directory - clear it
+      setDestPath(null);
+      console.warn('Dropped item is not a folder');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [setDestPath]);
+
+  // Register this zone with the global drop handler
+  const { ref, isHovered, isDraggingFiles } = useDropZone('destination', handleDrop);
 
   // Restore last destination on mount if setting is enabled
   useEffect(() => {
     if (rememberLastDestination && lastDestinationPath && !destPath && isTauri()) {
-      // Verify the path still exists
-      invoke('get_directory_info', { path: lastDestinationPath })
-        .then(() => {
-          setDestPath(lastDestinationPath);
+      invoke<boolean>('is_path_accessible', { path: lastDestinationPath })
+        .then((isAccessible) => {
+          if (isAccessible) {
+            setDestPath(lastDestinationPath);
+          } else {
+            setLastDestinationPath(null);
+          }
         })
         .catch(() => {
-          // Path no longer exists, clear it
           setLastDestinationPath(null);
         });
     }
-  }, []); // Only run once on mount
+  }, []);
 
   // Save destination path when it changes
   useEffect(() => {
     if (rememberLastDestination && destPath) {
-      setLastDestinationPath(destPath);
+      addRecentDestination(destPath);
     }
-  }, [destPath, rememberLastDestination, setLastDestinationPath]);
+  }, [destPath, rememberLastDestination, addRecentDestination]);
 
-  // Handle Tauri native drag-drop events
+  // Close recent dropdown when clicking outside
   useEffect(() => {
-    if (!isTauri()) return;
-
-    const appWindow = getCurrentWebviewWindow();
-    let unlisten: (() => void) | null = null;
-
-    const isOverThisZone = (position: { x: number; y: number }) => {
-      if (!dropZoneRef.current) return false;
-      const rect = dropZoneRef.current.getBoundingClientRect();
-      return (
-        position.x >= rect.left &&
-        position.x <= rect.right &&
-        position.y >= rect.top &&
-        position.y <= rect.bottom
-      );
-    };
-
-    appWindow.onDragDropEvent(async (event) => {
-      if (event.payload.type === 'enter') {
-        setIsDraggingFiles(true);
-      } else if (event.payload.type === 'over') {
-        setIsDraggingFiles(true);
-        const position = event.payload.position;
-        if (position && isOverThisZone(position)) {
-          setDragOverZone('destination');
-        }
-      } else if (event.payload.type === 'drop') {
-        const position = event.payload.position;
-        const wasOverHere = position && isOverThisZone(position);
-        setIsDraggingFiles(false);
-        
-        // Only handle drop if it was over this zone
-        if (!wasOverHere) return;
-        
-        const paths = event.payload.paths;
-        if (paths && paths.length > 0) {
-          // For destination, we only want directories
-          // Try to check if it's a directory by calling get_directory_info
-          const firstPath = paths[0];
-          try {
-            await invoke('get_directory_info', { path: firstPath });
-            // If it succeeds, it's a directory
-            setDestPath(firstPath);
-          } catch {
-            // Not a directory - ignore for destination
-            console.warn('Dropped item is not a folder');
-          }
-        }
-      } else if (event.payload.type === 'leave') {
-        setIsDraggingFiles(false);
+    const handleClickOutside = (event: MouseEvent) => {
+      if (recentDropdownRef.current && !recentDropdownRef.current.contains(event.target as Node)) {
+        setShowRecent(false);
       }
-    }).then((fn) => {
-      unlisten = fn;
-    });
-
-    return () => {
-      if (unlisten) unlisten();
     };
-  }, [setDestPath, setIsDraggingFiles, setDragOverZone]);
+    if (showRecent) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showRecent]);
 
-  // Fetch volume info when dest path changes (only if not cached)
+  const handleSelectRecent = useCallback((path: string) => {
+    setDestPath(path);
+    setShowRecent(false);
+  }, [setDestPath]);
+
+  // Fetch volume info when dest path changes
+  const prevDestPath = useRef<string | null>(null);
   useEffect(() => {
     if (!destPath || !isTauri()) {
-      setDestVolumeInfo(null);
+      if (destVolumeInfo) setDestVolumeInfo(null);
       return;
     }
     
-    // Skip if we already have cached info for this path
+    // Only fetch if path actually changed
+    if (destPath === prevDestPath.current) return;
+    prevDestPath.current = destPath;
+    
+    // Skip if we already have info for this volume
     if (destVolumeInfo?.mount_point && destPath.startsWith(destVolumeInfo.mount_point)) {
       return;
     }
@@ -135,55 +129,48 @@ export function OutputSelector() {
         setDestVolumeInfo(null);
       })
       .finally(() => setIsLoadingVolume(false));
-  }, [destPath, destVolumeInfo?.mount_point, setDestVolumeInfo]);
+  }, [destPath]);
 
   const handleFolderClick = useCallback(() => {
     selectDestFolder();
   }, [selectDestFolder]);
 
-  const texts = {
-    en: {
-      label: 'Destination',
-      title: 'Drop a folder here',
-      subtitle: 'or choose one with the button below',
-      selectedTitle: 'Files will be copied to',
-      choose: 'Choose folder',
-      change: 'Change',
-      dragging: 'Let go to set destination',
-    },
-    nl: {
-      label: 'Bestemming',
-      title: 'Sleep een map hierheen',
-      subtitle: 'of kies er een met de knop hieronder',
-      selectedTitle: 'Bestanden worden gekopieerd naar',
-      choose: 'Kies map',
-      change: 'Wijzig',
-      dragging: 'Laat los om bestemming in te stellen',
-    },
-  };
-
-  const t = texts[language];
+  // Handle keyboard activation for the drop zone
+  const handleKeyDown = useCallback((event: React.KeyboardEvent) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      if (!destPath) {
+        handleFolderClick();
+      }
+    }
+  }, [destPath, handleFolderClick]);
 
   return (
     <div className="flex flex-col gap-2 h-full">
       <span className="text-xs font-medium text-text-tertiary uppercase tracking-wide px-1">
-        {t.label}
+        {t('output.label')}
       </span>
       <div
-        ref={dropZoneRef}
+        ref={ref}
+        data-dropzone="destination"
+        role="button"
+        tabIndex={0}
+        aria-label={destPath ? `${t('output.selectedTitle')}: ${destPath}` : t('output.title')}
+        onKeyDown={handleKeyDown}
         className={clsx(
-          'relative rounded-2xl lg:rounded-3xl border-2 border-dashed flex-1 min-h-50',
-          'transition-all duration-200 ease-out',
-          'flex flex-col items-center justify-center gap-4 lg:gap-6 py-6 lg:py-10 px-4 sm:px-6 lg:px-10',
-          isHoveredHere
-            ? 'border-accent bg-accent-subtle'
-            : isHoveredElsewhere
+          'relative rounded-2xl lg:rounded-3xl border-2 border-dashed h-[220px]',
+          'transition-colors duration-150',
+          'flex flex-col items-center justify-center px-4 sm:px-6 lg:px-10',
+          'focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent',
+          isHovered
+            ? 'border-accent bg-accent/10'
+            : isDraggingFiles
               ? 'border-text-tertiary/50 bg-bg-tertiary/30'
               : 'border-border bg-bg-secondary/50 hover:border-text-tertiary hover:bg-bg-secondary/70'
         )}
       >
-        <AnimatePresence mode="wait">
-          {isHoveredHere ? (
+        <AnimatePresence mode="wait" initial={false}>
+          {isDraggingFiles ? (
             <motion.div
               key="dragging"
               initial={{ opacity: 0, scale: 0.95 }}
@@ -192,112 +179,166 @@ export function OutputSelector() {
               transition={{ duration: 0.15 }}
               className="flex flex-col items-center gap-3"
             >
-              <motion.div
-                animate={{ y: [0, -6, 0] }}
-                transition={{ repeat: Infinity, duration: 1.4, ease: 'easeInOut' }}
-                className="w-12 h-12 rounded-xl bg-accent/15 flex items-center justify-center"
-              >
+              <div className="w-12 h-12 rounded-xl bg-accent/20 flex items-center justify-center">
                 <Download className="w-5 h-5 text-accent" strokeWidth={1.75} />
-              </motion.div>
+              </div>
               <p className="text-sm font-semibold text-accent">
-                {t.dragging}
+                {t('output.dragging')}
+              </p>
+            </motion.div>
+          ) : isLoading ? (
+            <motion.div
+              key="loading"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="flex flex-col items-center gap-3"
+            >
+              <div className="w-12 h-12 rounded-xl bg-accent/15 flex items-center justify-center">
+                <Loader2 className="w-5 h-5 text-accent animate-spin" strokeWidth={1.75} />
+              </div>
+              <p className="text-sm font-medium text-text-secondary">
+                {t('common.loading')}
               </p>
             </motion.div>
           ) : destPath ? (
             <motion.div
               key="selected"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
               transition={{ duration: 0.15 }}
-              className="flex flex-col items-center gap-4 w-full"
+              className="flex flex-col items-center gap-3 w-full"
             >
               <div className="w-12 h-12 rounded-xl bg-accent/15 flex items-center justify-center">
                 <Download className="w-5 h-5 text-accent" strokeWidth={1.75} />
               </div>
-              <div className="text-center space-y-1 w-full">
+              <div className="text-center space-y-0.5 w-full">
                 <p className="text-xs text-text-tertiary">
-                  {t.selectedTitle}
+                  {t('output.selectedTitle')}
                 </p>
                 <p className="text-sm font-semibold text-text-primary" title={destPath}>
                   {destPath.split('/').pop() || destPath}
                 </p>
-                <p className="text-xs text-text-tertiary break-all px-2" title={destPath}>
+                <p className="text-xs text-text-tertiary break-all px-2 line-clamp-1" title={destPath}>
                   {destPath}
                 </p>
                 {isLoadingVolume ? (
                   <p className="text-xs text-text-tertiary flex items-center justify-center gap-1">
                     <Loader2 className="w-3 h-3 animate-spin" />
-                    Loading drive info...
                   </p>
                 ) : destVolumeInfo && (
-                  <div className="text-xs text-text-tertiary space-y-0.5">
+                  <div className="text-xs text-text-tertiary">
                     <p className="flex items-center justify-center gap-1">
                       <HardDrive className="w-3 h-3" />
-                      {destVolumeInfo.manufacturer && `${destVolumeInfo.manufacturer} `}
-                      {destVolumeInfo.is_external 
-                        ? (destVolumeInfo.drive_type !== 'Unknown' ? `External ${destVolumeInfo.drive_type}` : 'External Drive')
-                        : (destVolumeInfo.drive_type !== 'Unknown' ? destVolumeInfo.drive_type : 'Internal Drive')
-                      }
+                      {destVolumeInfo.is_external ? t('common.external') : t('common.internal')}
+                      {destVolumeInfo.total_space > 0 && (
+                        <span> · {formatBytes(destVolumeInfo.available_space)} {t('common.free')}</span>
+                      )}
                     </p>
-                    {destVolumeInfo.total_space > 0 && (
-                      <p>
-                        {formatBytes(destVolumeInfo.total_space - destVolumeInfo.available_space)} used · {formatBytes(destVolumeInfo.available_space)} free
-                      </p>
-                    )}
                   </div>
                 )}
               </div>
-              <div className="flex gap-3">
+              <div className="flex gap-2">
                 <Button
                   variant="secondary"
-                  size="md"
+                  size="sm"
                   onClick={() => { setDestPath(null); setDestVolumeInfo(null); }}
-                  leftIcon={<X className="w-4 h-4" strokeWidth={1.75} />}
-                  className="px-5"
+                  leftIcon={<X className="w-3.5 h-3.5" strokeWidth={2} />}
                 >
-                  Clear
+                  {t('output.clear')}
                 </Button>
                 <Button
                   variant="primary"
-                  size="md"
+                  size="sm"
                   onClick={handleFolderClick}
-                  leftIcon={<FolderOpen className="w-4 h-4" strokeWidth={1.75} />}
-                  className="px-6"
+                  leftIcon={<FolderOpen className="w-3.5 h-3.5" strokeWidth={2} />}
                 >
-                  {t.change}
+                  {t('output.change')}
                 </Button>
               </div>
             </motion.div>
           ) : (
             <motion.div
               key="idle"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
               transition={{ duration: 0.15 }}
-              className="flex flex-col items-center gap-4"
+              className="flex flex-col items-center gap-3"
             >
               <div className="w-12 h-12 rounded-xl bg-bg-tertiary flex items-center justify-center">
                 <Download className="w-5 h-5 text-text-tertiary" strokeWidth={1.75} />
               </div>
-              <div className="text-center space-y-1">
+              <div className="text-center space-y-0.5">
                 <p className="text-sm font-semibold text-text-primary">
-                  {t.title}
+                  {t('output.title')}
                 </p>
                 <p className="text-xs text-text-tertiary">
-                  {t.subtitle}
+                  {t('output.subtitle')}
                 </p>
               </div>
-              <Button
-                variant="primary"
-                size="md"
-                onClick={handleFolderClick}
-                leftIcon={<FolderOpen className="w-4 h-4" strokeWidth={1.75} />}
-                className="px-4 sm:px-6"
-              >
-                {t.choose}
-              </Button>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleFolderClick}
+                  leftIcon={<FolderOpen className="w-3.5 h-3.5" strokeWidth={2} />}
+                >
+                  {t('output.choose')}
+                </Button>
+                {recentDestinations.length > 0 && (
+                  <div className="relative" ref={recentDropdownRef}>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setShowRecent(!showRecent)}
+                      leftIcon={<Clock className="w-3.5 h-3.5" strokeWidth={2} />}
+                      rightIcon={<ChevronDown className={clsx('w-3.5 h-3.5 transition-transform', showRecent && 'rotate-180')} />}
+                    >
+                      {t('output.recentDestinations')}
+                    </Button>
+                    <AnimatePresence>
+                      {showRecent && (
+                        <motion.div
+                          initial={{ opacity: 0, y: -8 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -8 }}
+                          transition={{ duration: 0.15 }}
+                          className="absolute top-full left-0 mt-2 w-72 max-h-64 overflow-y-auto bg-bg-primary border border-border rounded-xl shadow-lg z-50"
+                        >
+                          <div className="p-2">
+                            {recentDestinations.map((path, index) => (
+                              <button
+                                key={`${path}-${index}`}
+                                onClick={() => handleSelectRecent(path)}
+                                className="w-full text-left px-3 py-2 rounded-lg hover:bg-bg-secondary transition-colors"
+                              >
+                                <p className="text-sm font-medium text-text-primary truncate">
+                                  {path.split('/').pop() || path}
+                                </p>
+                                <p className="text-xs text-text-tertiary truncate">
+                                  {path}
+                                </p>
+                              </button>
+                            ))}
+                          </div>
+                          <div className="border-t border-border p-2">
+                            <button
+                              onClick={() => { clearRecentDestinations(); setShowRecent(false); }}
+                              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm text-error hover:bg-error/10 transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                              {t('output.clearRecent')}
+                            </button>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                )}
+              </div>
             </motion.div>
           )}
         </AnimatePresence>

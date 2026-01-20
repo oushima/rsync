@@ -9,8 +9,16 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::errors::{SyncError, SyncResult};
+use crate::file_ops::sync_parent_directory;
 
+/// Size of each block for partial file verification: 256 KiB.
+/// Used when resuming interrupted transfers to verify file integrity
+/// by sampling blocks rather than re-hashing entire files.
 const VERIFICATION_BLOCK_SIZE: u64 = 256 * 1024;
+
+/// Number of blocks to verify at end of partially transferred files.
+/// Verifying 4 blocks (1 MiB total) provides good confidence of integrity
+/// while keeping verification fast for large files.
 const BLOCKS_TO_VERIFY: u64 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +87,8 @@ pub struct TransferState {
     pub files_skipped: usize,
     pub files: HashMap<PathBuf, FileTransferState>,
     pub conflicts: Vec<PathBuf>,
+    /// Number of conflicts that have been resolved during this transfer
+    pub conflicts_resolved: usize,
     pub started_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
@@ -103,6 +113,7 @@ impl TransferState {
             files_skipped: 0,
             files: HashMap::new(),
             conflicts: Vec::new(),
+            conflicts_resolved: 0,
             started_at: now,
             completed_at: None,
             updated_at: now,
@@ -187,6 +198,8 @@ impl TransferStateManager {
             state_dir,
         };
 
+        // Clean up old state files before loading
+        manager.cleanup_old_states(7)?;
         manager.load_persisted_states()?;
         Ok(manager)
     }
@@ -217,6 +230,44 @@ impl TransferStateManager {
         Ok(())
     }
 
+    /// Removes state files older than the specified number of days.
+    /// This helps prevent accumulation of old transfer state files.
+    pub fn cleanup_old_states(&self, max_age_days: u64) -> SyncResult<()> {
+        if !self.state_dir.exists() {
+            return Ok(());
+        }
+
+        let max_age = std::time::Duration::from_secs(max_age_days * 24 * 60 * 60);
+        let now = std::time::SystemTime::now();
+
+        for entry in std::fs::read_dir(&self.state_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            
+            if !path.extension().map_or(false, |ext| ext == "json") {
+                continue;
+            }
+
+            // Check if file is old enough to be cleaned up
+            if let Ok(metadata) = entry.metadata() {
+                if let Ok(modified) = metadata.modified() {
+                    if let Ok(age) = now.duration_since(modified) {
+                        if age > max_age {
+                            // Only remove finished transfer state files
+                            if let Ok(state) = self.load_state_file(&path) {
+                                if state.is_finished() {
+                                    let _ = std::fs::remove_file(&path);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn load_state_file(&self, path: &Path) -> SyncResult<TransferState> {
         let content = std::fs::read_to_string(path)?;
         let state: TransferState = serde_json::from_str(&content)?;
@@ -234,6 +285,13 @@ impl TransferStateManager {
         let content = serde_json::to_string_pretty(state)?;
         std::fs::write(&temp_file, content)?;
         std::fs::rename(&temp_file, &state_file)?;
+        
+        // Sync parent directory to ensure the state file rename is durable.
+        // We log but don't fail on sync errors - the file is renamed, just not
+        // guaranteed durable on immediate power loss.
+        if let Err(e) = sync_parent_directory(&state_file) {
+            log::warn!("Parent directory sync failed for state file: {:?}", e);
+        }
 
         Ok(())
     }
@@ -285,6 +343,34 @@ impl TransferStateManager {
                     Some(s.clone())
                 } else {
                     None
+                }
+            })
+            .collect()
+    }
+
+    /// Gets all interrupted transfers that can be resumed.
+    /// These are transfers with status Paused, Failed, or Running (interrupted by app crash).
+    /// Excludes Pending transfers as those haven't started yet.
+    pub fn get_interrupted_transfers(&self) -> Vec<TransferState> {
+        let states = self.states.read();
+        states
+            .values()
+            .filter_map(|state| {
+                let s = state.read();
+                // Include paused, failed, or running (interrupted) transfers
+                // that have made some progress
+                match s.status {
+                    TransferStatus::Paused | TransferStatus::Failed => Some(s.clone()),
+                    TransferStatus::Running => {
+                        // Running status without active control means it was interrupted
+                        // (e.g., app crashed during transfer)
+                        Some(s.clone())
+                    }
+                    TransferStatus::Pending if s.bytes_transferred > 0 => {
+                        // Pending with progress means it was interrupted during startup
+                        Some(s.clone())
+                    }
+                    _ => None,
                 }
             })
             .collect()

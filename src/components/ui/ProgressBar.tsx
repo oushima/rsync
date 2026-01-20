@@ -9,6 +9,7 @@ export interface ProgressBarProps {
   showValue?: boolean;
   animated?: boolean;
   striped?: boolean;
+  shimmer?: boolean;
   className?: string;
   label?: string;
 }
@@ -21,6 +22,7 @@ export function ProgressBar({
   showValue = false,
   animated = true,
   striped = false,
+  shimmer = false,
   className,
   label,
 }: ProgressBarProps) {
@@ -67,7 +69,7 @@ export function ProgressBar({
       >
         <motion.div
           className={clsx(
-            'h-full rounded-full',
+            'h-full rounded-full relative overflow-hidden',
             variants[variant],
             striped && 'bg-stripes'
           )}
@@ -91,7 +93,33 @@ export function ProgressBar({
                 }
               : undefined
           }
-        />
+        >
+          {/* Shimmer effect overlay */}
+          {shimmer && percentage > 0 && percentage < 100 && (
+            <motion.div
+              className="absolute inset-0 w-full h-full"
+              style={{
+                background: `linear-gradient(
+                  90deg,
+                  transparent 0%,
+                  rgba(255, 255, 255, 0) 40%,
+                  rgba(255, 255, 255, 0.4) 50%,
+                  rgba(255, 255, 255, 0) 60%,
+                  transparent 100%
+                )`,
+              }}
+              animate={{
+                x: ['-100%', '200%'],
+              }}
+              transition={{
+                duration: 1.5,
+                ease: 'easeInOut',
+                repeat: Infinity,
+                repeatDelay: 0.5,
+              }}
+            />
+          )}
+        </motion.div>
       </div>
     </div>
   );

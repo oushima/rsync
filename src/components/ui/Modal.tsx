@@ -1,8 +1,58 @@
-import { type ReactNode, useEffect, useCallback } from 'react';
+import { type ReactNode, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X } from 'lucide-react';
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 import { Button } from './Button';
+
+/**
+ * Traps focus within a modal container for accessibility.
+ * Returns a keydown handler to attach to the modal element.
+ */
+function useFocusTrap(isOpen: boolean) {
+  const modalRef = useRef<HTMLDivElement>(null);
+  const previousActiveElement = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      // Store the currently focused element to restore later
+      previousActiveElement.current = document.activeElement as HTMLElement;
+      
+      // Focus the modal or first focusable element
+      const focusableElements = modalRef.current?.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusableElements && focusableElements.length > 0) {
+        focusableElements[0].focus();
+      }
+    } else {
+      // Restore focus when modal closes
+      previousActiveElement.current?.focus();
+    }
+  }, [isOpen]);
+
+  const handleKeyDown = useCallback((event: React.KeyboardEvent) => {
+    if (event.key !== 'Tab') return;
+
+    const focusableElements = modalRef.current?.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    if (!focusableElements || focusableElements.length === 0) return;
+
+    const firstElement = focusableElements[0];
+    const lastElement = focusableElements[focusableElements.length - 1];
+
+    if (event.shiftKey && document.activeElement === firstElement) {
+      event.preventDefault();
+      lastElement.focus();
+    } else if (!event.shiftKey && document.activeElement === lastElement) {
+      event.preventDefault();
+      firstElement.focus();
+    }
+  }, []);
+
+  return { modalRef, handleKeyDown };
+}
 
 export interface ModalProps {
   isOpen: boolean;
@@ -29,6 +79,9 @@ export function Modal({
   closeOnEscape = true,
   showCloseButton = true,
 }: ModalProps) {
+  const { t } = useTranslation();
+  const { modalRef, handleKeyDown } = useFocusTrap(isOpen);
+  
   const handleEscape = useCallback(
     (event: KeyboardEvent) => {
       if (closeOnEscape && event.key === 'Escape') {
@@ -74,6 +127,8 @@ export function Modal({
 
           {/* Modal */}
           <motion.div
+            ref={modalRef}
+            onKeyDown={handleKeyDown}
             initial={{ opacity: 0, scale: 0.95, y: 10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
@@ -116,10 +171,10 @@ export function Modal({
                     variant="ghost"
                     size="sm"
                     onClick={onClose}
-                    className="shrink-0 -mr-2 -mt-2 h-8 w-8 p-0"
-                    aria-label="Close modal"
+                    className="shrink-0 -mr-2 -mt-2 h-10 w-10 p-0 rounded-full hover:bg-bg-tertiary"
+                    aria-label={t('modal.close')}
                   >
-                    <X className="w-4 h-4" />
+                    <X className="w-5 h-5" />
                   </Button>
                 )}
               </div>

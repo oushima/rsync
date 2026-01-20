@@ -1,100 +1,88 @@
-import { FolderOpen, ArrowRight, Shield, Power } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { FolderOpen, ArrowRight, Shield, Power, Files, RefreshCw, Clock, Ban, HelpCircle, Fingerprint, Zap, Gauge } from 'lucide-react';
 import clsx from 'clsx';
 import { useSyncStore } from '../../stores/syncStore';
 import { useSync } from '../../hooks/useSync';
-import { useSettingsStore } from '../../stores/settingsStore';
 import { Button } from '../ui/Button';
 import { Toggle } from '../ui/Toggle';
-import { Select } from '../ui/Select';
+import { Dropdown } from '../ui/Dropdown';
+import { ExcludePatterns } from './ExcludePatterns';
+import type { FileExistsAction } from '../../types';
+import { BANDWIDTH_PRESETS } from '../../types';
 
 export function SyncOptions() {
+  const { t } = useTranslation();
   const { syncOptions, destPath, syncState } = useSyncStore();
   const { selectDestFolder, updateSyncOptions } = useSync();
-  const { language } = useSettingsStore();
 
   const isDisabled = ['preparing', 'syncing', 'paused'].includes(syncState);
 
-  const texts = {
-    en: {
-      destination: 'Destination (where copies go)',
-      selectDest: 'Choose the folder where the copies should go',
-      options: 'How to copy',
-      overwriteNewer: 'Overwrite newer files',
-      overwriteNewerDesc: 'Replace even if the other file is newer',
-      overwriteOlder: 'Overwrite older files',
-      overwriteOlderDesc: 'Replace only if the other file is older',
-      skipExisting: 'Skip existing files',
-      skipExistingDesc: 'Leave files that are already there',
-      deleteOrphans: 'Delete extra files',
-      deleteOrphansDesc: 'Remove files that only exist in the destination',
-      preservePermissions: 'Keep permissions',
-      preservePermissionsDesc: 'Keep the original file permissions',
-      followSymlinks: 'Follow shortcuts (symlinks)',
-      followSymlinksDesc: 'Copy what the shortcut points to',
-      dryRun: 'Dry run',
-      dryRunDesc: 'Show a preview without changing anything',
-      verification: 'File verification',
-      verifyChecksum: 'Verify files are copied correctly',
-      verifyOff: 'Off - Trust the copy',
-      verifyDuring: 'During - Check while copying',
-      verifyAfter: 'After - Check when done',
-      verifyBoth: 'Both - Double check everything',
-      autoRepair: 'Auto-repair',
-      autoRepairDesc: 'If a file is broken, try copying it again',
-      afterComplete: 'When finished',
-      shutdownAfterComplete: 'Turn off computer when done',
-      shutdownAfterCompleteDesc: 'Shut down your Mac after all files are copied',
+  const fileExistsOptions = [
+    { 
+      value: 'replace-different' as FileExistsAction, 
+      label: t('options.replaceDifferentLabel'), 
+      description: t('options.replaceDifferentDesc'),
+      icon: <Files className="w-4 h-4" strokeWidth={1.75} />,
     },
-    nl: {
-      destination: 'Bestemming (waar kopieën heen gaan)',
-      selectDest: 'Kies de map waar de kopieën moeten komen',
-      options: 'Hoe kopiëren',
-      overwriteNewer: 'Nieuwere bestanden overschrijven',
-      overwriteNewerDesc: 'Vervang ook als het andere bestand nieuwer is',
-      overwriteOlder: 'Oudere bestanden overschrijven',
-      overwriteOlderDesc: 'Vervang alleen als het andere bestand ouder is',
-      skipExisting: 'Bestaande bestanden overslaan',
-      skipExistingDesc: 'Laat bestanden die er al zijn staan',
-      deleteOrphans: 'Extra bestanden verwijderen',
-      deleteOrphansDesc: 'Verwijder bestanden die alleen op de bestemming staan',
-      preservePermissions: 'Permissies bewaren',
-      preservePermissionsDesc: 'Behoud de originele bestandsrechten',
-      followSymlinks: 'Snelkoppelingen volgen (symlinks)',
-      followSymlinksDesc: 'Kopieer waar de snelkoppeling naar wijst',
-      dryRun: 'Proefdraaien',
-      dryRunDesc: 'Toon een voorbeeld zonder iets te veranderen',
-      verification: 'Bestandscontrole',
-      verifyChecksum: 'Controleer of bestanden goed gekopieerd zijn',
-      verifyOff: 'Uit - Vertrouw de kopie',
-      verifyDuring: 'Tijdens - Controleer tijdens kopiëren',
-      verifyAfter: 'Na afloop - Controleer als het klaar is',
-      verifyBoth: 'Beide - Dubbel controleren',
-      autoRepair: 'Automatisch herstellen',
-      autoRepairDesc: 'Als een bestand kapot is, probeer opnieuw te kopiëren',
-      afterComplete: 'Als het klaar is',
-      shutdownAfterComplete: 'Computer uitzetten als klaar',
-      shutdownAfterCompleteDesc: 'Zet je Mac uit nadat alle bestanden gekopieerd zijn',
+    { 
+      value: 'replace-older' as FileExistsAction, 
+      label: t('options.replaceSmartLabel'), 
+      description: t('options.replaceSmartDesc'),
+      icon: <Clock className="w-4 h-4" strokeWidth={1.75} />,
     },
-  };
+    { 
+      value: 'replace-all' as FileExistsAction, 
+      label: t('options.replaceAllLabel'), 
+      description: t('options.replaceAllDesc'),
+      icon: <RefreshCw className="w-4 h-4" strokeWidth={1.75} />,
+    },
+    { 
+      value: 'skip' as FileExistsAction, 
+      label: t('options.skipLabel'), 
+      description: t('options.skipDesc'),
+      icon: <Ban className="w-4 h-4" strokeWidth={1.75} />,
+    },
+    { 
+      value: 'ask' as FileExistsAction, 
+      label: t('options.askLabel'), 
+      description: t('options.askDesc'),
+      icon: <HelpCircle className="w-4 h-4" strokeWidth={1.75} />,
+    },
+  ];
 
-  const t = texts[language];
-
-  const options = [
-    { key: 'overwriteNewer', label: t.overwriteNewer, desc: t.overwriteNewerDesc },
-    { key: 'overwriteOlder', label: t.overwriteOlder, desc: t.overwriteOlderDesc },
-    { key: 'skipExisting', label: t.skipExisting, desc: t.skipExistingDesc },
-    { key: 'deleteOrphans', label: t.deleteOrphans, desc: t.deleteOrphansDesc },
-    { key: 'preservePermissions', label: t.preservePermissions, desc: t.preservePermissionsDesc },
-    { key: 'followSymlinks', label: t.followSymlinks, desc: t.followSymlinksDesc },
-    { key: 'dryRun', label: t.dryRun, desc: t.dryRunDesc },
-  ] as const;
+  const verifyOptions = [
+    { 
+      value: 'off', 
+      label: t('options.verifyOffLabel'), 
+      description: t('options.verifyOffDesc'),
+      icon: <Zap className="w-4 h-4" strokeWidth={1.75} />,
+    },
+    { 
+      value: 'during', 
+      label: t('options.verifyDuringLabel'), 
+      description: t('options.verifyDuringDesc'),
+      icon: <Fingerprint className="w-4 h-4" strokeWidth={1.75} />,
+    },
+    { 
+      value: 'after', 
+      label: t('options.verifyAfterLabel'), 
+      description: t('options.verifyAfterDesc'),
+      icon: <Fingerprint className="w-4 h-4" strokeWidth={1.75} />,
+    },
+    { 
+      value: 'both', 
+      label: t('options.verifyBothLabel'), 
+      description: t('options.verifyBothDesc'),
+      icon: <Shield className="w-4 h-4" strokeWidth={1.75} />,
+    },
+  ];
 
   return (
     <div className="flex flex-col gap-6">
       {/* Destination Selector */}
       <div className="rounded-3xl bg-bg-secondary border border-border-subtle shadow-xs p-6 md:p-7">
         <label className="text-xs font-medium text-text-secondary uppercase tracking-wide block mb-3">
-          {t.destination}
+          {t('options.destination')}
         </label>
         <div className="flex flex-col sm:flex-row gap-2">
           <div
@@ -112,7 +100,7 @@ export function SyncOptions() {
               </span>
             ) : (
               <span className="text-sm text-text-tertiary">
-                {t.selectDest}
+                {t('options.selectDest')}
               </span>
             )}
           </div>
@@ -128,52 +116,51 @@ export function SyncOptions() {
         </div>
       </div>
 
-      {/* Sync Options */}
+      {/* File Conflict Options */}
       <div className="rounded-3xl bg-bg-secondary border border-border-subtle shadow-xs p-6 md:p-7">
-        <label className="text-xs font-medium text-text-secondary uppercase tracking-wide block mb-3">
-          {t.options}
-        </label>
-        <div className="space-y-3">
-          {options.map((option) => (
-            <Toggle
-              key={option.key}
-              label={option.label}
-              description={option.desc}
-              checked={syncOptions[option.key]}
-              onChange={(e) =>
-                updateSyncOptions({ [option.key]: e.target.checked })
-              }
-              disabled={isDisabled}
-            />
-          ))}
+        <div className="flex items-center gap-2 mb-2">
+          <Files className="w-4 h-4 text-accent" strokeWidth={1.75} />
+          <h3 className="text-[15px] font-semibold text-text-primary">
+            {t('options.conflictTitle')}
+          </h3>
         </div>
+        <p className="text-[13px] text-text-tertiary mb-5 leading-relaxed">
+          {t('options.conflictNote')}
+        </p>
+        
+        <Dropdown
+          value={syncOptions.fileExistsAction}
+          onChange={(value) => updateSyncOptions({ fileExistsAction: value as FileExistsAction })}
+          options={fileExistsOptions}
+          disabled={isDisabled}
+        />
       </div>
 
-      {/* Verification Options */}
+      {/* File Integrity Verification */}
       <div className="rounded-3xl bg-bg-secondary border border-border-subtle shadow-xs p-6 md:p-7">
-        <div className="flex items-center gap-2 mb-4">
+        <div className="flex items-center gap-2 mb-2">
           <Shield className="w-4 h-4 text-accent" strokeWidth={1.75} />
-          <label className="text-xs font-medium text-text-secondary uppercase tracking-wide">
-            {t.verification}
-          </label>
+          <h3 className="text-[15px] font-semibold text-text-primary">
+            {t('options.integrityTitle')}
+          </h3>
         </div>
+        <p className="text-[13px] text-text-tertiary mb-5 leading-relaxed">
+          {t('options.integrityNote')}
+        </p>
+        
         <div className="space-y-4">
-          <Select
-            label={t.verifyChecksum}
+          <Dropdown
+            label={t('options.verifyLabel')}
             value={syncOptions.verifyChecksum}
-            onChange={(e) => updateSyncOptions({ verifyChecksum: e.target.value as 'off' | 'during' | 'after' | 'both' })}
+            onChange={(value) => updateSyncOptions({ verifyChecksum: value as 'off' | 'during' | 'after' | 'both' })}
+            options={verifyOptions}
             disabled={isDisabled}
-            options={[
-              { value: 'off', label: t.verifyOff },
-              { value: 'during', label: t.verifyDuring },
-              { value: 'after', label: t.verifyAfter },
-              { value: 'both', label: t.verifyBoth },
-            ]}
           />
+          
           {syncOptions.verifyChecksum !== 'off' && (
             <Toggle
-              label={t.autoRepair}
-              description={t.autoRepairDesc}
+              label={t('options.autoRepairLabel')}
+              description={t('options.autoRepairDesc')}
               checked={syncOptions.autoRepair}
               onChange={(e) => updateSyncOptions({ autoRepair: e.target.checked })}
               disabled={isDisabled}
@@ -182,17 +169,102 @@ export function SyncOptions() {
         </div>
       </div>
 
+      {/* Other Options */}
+      <div className="rounded-3xl bg-bg-secondary border border-border-subtle shadow-xs p-6 md:p-7">
+        <div className="flex items-center gap-2 mb-5">
+          <h3 className="text-[15px] font-semibold text-text-primary">
+            {t('options.otherTitle')}
+          </h3>
+        </div>
+        
+        <div className="space-y-4">
+          <Toggle
+            label={t('options.deleteOrphansLabel')}
+            description={t('options.deleteOrphansDesc')}
+            checked={syncOptions.deleteOrphans}
+            onChange={(e) => updateSyncOptions({ deleteOrphans: e.target.checked })}
+            disabled={isDisabled}
+          />
+          <Toggle
+            label={t('options.preserveLabel')}
+            description={t('options.preserveDesc')}
+            checked={syncOptions.preservePermissions}
+            onChange={(e) => updateSyncOptions({ preservePermissions: e.target.checked })}
+            disabled={isDisabled}
+          />
+          <Toggle
+            label={t('options.symlinkLabel')}
+            description={t('options.symlinkDesc')}
+            checked={syncOptions.followSymlinks}
+            onChange={(e) => updateSyncOptions({ followSymlinks: e.target.checked })}
+            disabled={isDisabled}
+          />
+          <Toggle
+            label={t('options.dryRunLabel')}
+            description={t('options.dryRunDesc')}
+            checked={syncOptions.dryRun}
+            onChange={(e) => updateSyncOptions({ dryRun: e.target.checked })}
+            disabled={isDisabled}
+          />
+        </div>
+      </div>
+
+      {/* Exclude Patterns */}
+      <ExcludePatterns
+        patterns={syncOptions.excludePatterns}
+        onChange={(patterns) => updateSyncOptions({ excludePatterns: patterns })}
+        disabled={isDisabled}
+      />
+
+      {/* Bandwidth Throttling */}
+      <div className="rounded-3xl bg-bg-secondary border border-border-subtle shadow-xs p-6 md:p-7">
+        <div className="flex items-center gap-2 mb-2">
+          <Gauge className="w-4 h-4 text-accent" strokeWidth={1.75} />
+          <h3 className="text-[15px] font-semibold text-text-primary">
+            {t('options.bandwidthTitle')}
+          </h3>
+        </div>
+        <p className="text-[13px] text-text-tertiary mb-5 leading-relaxed">
+          {t('options.bandwidthDesc')}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {[
+            { value: BANDWIDTH_PRESETS.unlimited, label: t('options.bandwidthUnlimited') },
+            { value: BANDWIDTH_PRESETS['1mbps'], label: '1 Mbps' },
+            { value: BANDWIDTH_PRESETS['5mbps'], label: '5 Mbps' },
+            { value: BANDWIDTH_PRESETS['10mbps'], label: '10 Mbps' },
+            { value: BANDWIDTH_PRESETS['50mbps'], label: '50 Mbps' },
+            { value: BANDWIDTH_PRESETS['100mbps'], label: '100 Mbps' },
+          ].map((option) => (
+            <button
+              key={option.value}
+              onClick={() => updateSyncOptions({ bandwidthLimit: option.value })}
+              disabled={isDisabled}
+              className={clsx(
+                'px-4 py-2 rounded-xl text-sm font-medium transition-colors',
+                syncOptions.bandwidthLimit === option.value
+                  ? 'bg-accent text-white'
+                  : 'bg-bg-tertiary text-text-secondary hover:bg-bg-primary hover:text-text-primary',
+                isDisabled && 'opacity-50 cursor-not-allowed'
+              )}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* After Complete Options */}
       <div className="rounded-3xl bg-bg-secondary border border-border-subtle shadow-xs p-6 md:p-7">
         <div className="flex items-center gap-2 mb-4">
           <Power className="w-4 h-4 text-accent" strokeWidth={1.75} />
-          <label className="text-xs font-medium text-text-secondary uppercase tracking-wide">
-            {t.afterComplete}
-          </label>
+          <h3 className="text-[15px] font-semibold text-text-primary">
+            {t('options.afterTitle')}
+          </h3>
         </div>
         <Toggle
-          label={t.shutdownAfterComplete}
-          description={t.shutdownAfterCompleteDesc}
+          label={t('options.shutdownLabel')}
+          description={t('options.shutdownDesc')}
           checked={syncOptions.shutdownAfterComplete}
           onChange={(e) => updateSyncOptions({ shutdownAfterComplete: e.target.checked })}
           disabled={isDisabled}

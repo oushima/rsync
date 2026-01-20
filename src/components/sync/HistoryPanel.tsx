@@ -1,10 +1,14 @@
+import { useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'framer-motion';
-import { History, CheckCircle, XCircle, AlertCircle, Trash2, Clock, HardDrive, FileStack } from 'lucide-react';
+import { History, CheckCircle, XCircle, AlertCircle, Trash2, Clock, HardDrive, FileStack, Download, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
-import { useSyncStore } from '../../stores/syncStore';
+import { save } from '@tauri-apps/plugin-dialog';
+import { writeTextFile } from '@tauri-apps/plugin-fs';
+import { useHistoryStore } from '../../stores/historyStore';
 import { useSync } from '../../hooks/useSync';
-import { useSettingsStore } from '../../stores/settingsStore';
 import { Button } from '../ui/Button';
+import { logger } from '../../utils/logger';
 import type { TransferHistoryItem } from '../../types';
 
 interface HistoryRowProps {
@@ -12,24 +16,24 @@ interface HistoryRowProps {
 }
 
 function HistoryRow({ item }: HistoryRowProps) {
+  const { t, i18n } = useTranslation();
   const { formatBytes, formatTime } = useSync();
-  const { language } = useSettingsStore();
 
   const statusConfig = {
     completed: {
       icon: CheckCircle,
       color: 'text-success',
-      label: { en: 'Done', nl: 'Klaar' },
+      labelKey: 'history.done',
     },
     cancelled: {
       icon: XCircle,
       color: 'text-text-tertiary',
-      label: { en: 'Stopped', nl: 'Gestopt' },
+      labelKey: 'history.stopped',
     },
     error: {
       icon: AlertCircle,
       color: 'text-error',
-      label: { en: 'Problem', nl: 'Probleem' },
+      labelKey: 'history.problem',
     },
   };
 
@@ -37,7 +41,7 @@ function HistoryRow({ item }: HistoryRowProps) {
   const StatusIcon = status.icon;
 
   const formatDate = (date: Date) => {
-    return new Intl.DateTimeFormat(language === 'nl' ? 'nl-NL' : 'en-US', {
+    return new Intl.DateTimeFormat(i18n.language === 'nl' ? 'nl-NL' : 'en-US', {
       dateStyle: 'medium',
       timeStyle: 'short',
     }).format(date);
@@ -73,7 +77,7 @@ function HistoryRow({ item }: HistoryRowProps) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
             <span className={clsx('text-[15px] font-medium', status.color)}>
-              {status.label[language]}
+              {t(status.labelKey)}
             </span>
             <span className="text-[13px] text-text-tertiary">
               {formatDate(item.timestamp)}
@@ -88,7 +92,7 @@ function HistoryRow({ item }: HistoryRowProps) {
             <div className="flex items-center gap-1">
               <FileStack className="w-4 h-4" />
               <span>
-                {item.filesCount} {language === 'nl' ? 'bestanden gekopieerd' : 'files copied'}
+                {item.filesCount} {t('history.filesCopied')}
               </span>
             </div>
             <div className="flex items-center gap-1">
@@ -107,29 +111,59 @@ function HistoryRow({ item }: HistoryRowProps) {
 }
 
 export function HistoryPanel() {
-  const { history, clearHistory } = useSyncStore();
-  const { language } = useSettingsStore();
+  const { t } = useTranslation();
+  const { history, clearHistory } = useHistoryStore();
+  const [isExporting, setIsExporting] = useState(false);
 
-  const texts = {
-    en: {
-      title: 'Past syncs',
-      description: 'See what you copied before',
-      noHistory: 'Nothing here yet',
-      noHistoryDesc: 'Your past syncs will show up here',
-      clearHistory: 'Clear list',
-      items: 'items',
-    },
-    nl: {
-      title: 'Eerdere syncs',
-      description: 'Bekijk wat je eerder hebt gekopieerd',
-      noHistory: 'Nog niets om te tonen',
-      noHistoryDesc: 'Je eerdere syncs verschijnen hier',
-      clearHistory: 'Lijst leegmaken',
-      items: 'items',
-    },
-  };
+  const handleExportLogs = useCallback(async () => {
+    if (isExporting || history.length === 0) return;
 
-  const t = texts[language];
+    setIsExporting(true);
+    try {
+      const filePath = await save({
+        title: t('history.exportTitle'),
+        defaultPath: `rsync-history-${new Date().toISOString().split('T')[0]}.json`,
+        filters: [
+          { name: 'JSON', extensions: ['json'] },
+          { name: 'CSV', extensions: ['csv'] },
+        ],
+      });
+
+      if (!filePath) {
+        setIsExporting(false);
+        return;
+      }
+
+      const isCSV = filePath.toLowerCase().endsWith('.csv');
+      let content: string;
+
+      if (isCSV) {
+        // Generate CSV
+        const headers = ['ID', 'Source', 'Destination', 'Files', 'Size (bytes)', 'Duration (s)', 'Status', 'Timestamp'];
+        const rows = history.map((item) => [
+          item.id,
+          `"${(item.sourcePath || '').replace(/"/g, '""')}"`,
+          `"${(item.destPath || '').replace(/"/g, '""')}"`,
+          item.filesCount.toString(),
+          item.totalSize.toString(),
+          item.duration.toString(),
+          item.status,
+          item.timestamp instanceof Date ? item.timestamp.toISOString() : String(item.timestamp),
+        ]);
+        content = [headers.join(','), ...rows.map((row) => row.join(','))].join('\n');
+      } else {
+        // Generate JSON
+        content = JSON.stringify(history, null, 2);
+      }
+
+      await writeTextFile(filePath, content);
+      logger.debug(`History exported to ${filePath}`);
+    } catch (error) {
+      logger.error('Failed to export history:', error);
+    } finally {
+      setIsExporting(false);
+    }
+  }, [history, isExporting, t]);
 
   if (history.length === 0) {
     return (
@@ -137,8 +171,8 @@ export function HistoryPanel() {
         <div className="w-16 h-16 rounded-full bg-bg-tertiary flex items-center justify-center mb-4">
           <History className="w-8 h-8 text-text-tertiary" />
         </div>
-        <p className="text-[17px] text-text-secondary font-medium">{t.noHistory}</p>
-        <p className="text-[15px] text-text-tertiary mt-1">{t.noHistoryDesc}</p>
+        <p className="text-[17px] text-text-secondary font-medium">{t('history.noHistory')}</p>
+        <p className="text-[15px] text-text-tertiary mt-1">{t('history.noHistoryDesc')}</p>
       </div>
     );
   }
@@ -149,10 +183,10 @@ export function HistoryPanel() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h2 className="text-[20px] font-semibold text-text-primary">
-            {t.title}
+            {t('history.title')}
           </h2>
           <p className="text-[14px] text-text-secondary">
-            {history.length} {t.items}
+            {history.length} {t('history.items')}
           </p>
         </div>
         <Button
@@ -162,7 +196,16 @@ export function HistoryPanel() {
           leftIcon={<Trash2 className="w-4.5 h-4.5" />}
           className="text-error hover:text-error"
         >
-          {t.clearHistory}
+          {t('history.clearHistory')}
+        </Button>
+        <Button
+          variant="secondary"
+          size="md"
+          onClick={handleExportLogs}
+          disabled={isExporting}
+          leftIcon={isExporting ? <Loader2 className="w-4.5 h-4.5 animate-spin" /> : <Download className="w-4.5 h-4.5" />}
+        >
+          {t('history.exportLogs')}
         </Button>
       </div>
 
@@ -174,7 +217,7 @@ export function HistoryPanel() {
               key={item.id}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: index * 0.05 }}
+              transition={{ delay: Math.min(index * 0.05, 0.3) }}
             >
               <HistoryRow item={item} />
             </motion.div>

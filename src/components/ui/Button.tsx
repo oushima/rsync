@@ -1,6 +1,9 @@
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
-import { motion } from 'framer-motion';
+import { motion, type HTMLMotionProps } from 'framer-motion';
 import clsx from 'clsx';
+
+// Omit motion-specific props that we handle explicitly to avoid type conflicts
+type MotionButtonProps = Omit<HTMLMotionProps<'button'>, 'ref' | 'whileTap' | 'transition'>;
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
@@ -79,7 +82,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         disabled={disabled || isLoading}
         whileTap={{ scale: disabled || isLoading ? 1 : 0.98 }}
         transition={{ duration: 0.08 }}
-        {...(props as any)}
+        {...(props as MotionButtonProps)}
       >
         {isLoading ? (
           <svg

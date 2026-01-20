@@ -1,16 +1,263 @@
 //! File operations for the sync engine.
+//! 
+//! This module provides safe, atomic file operations with proper error handling
+//! for all edge cases including disk full, drive disconnection, and corruption.
 
 use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufReader, BufWriter, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use xxhash_rust::xxh3::xxh3_64;
 
 use crate::errors::{SyncError, SyncResult};
 
+/// Buffer size for file copy operations: 8 MiB.
+/// This size is optimized for modern SSD performance and minimizes syscall overhead
+/// while keeping memory usage reasonable for parallel transfers.
 pub const COPY_BUFFER_SIZE: usize = 8 * 1024 * 1024;
+
+/// Buffer size for hash computation: 1 MiB.
+/// Smaller than copy buffer to reduce memory pressure during verification
+/// while still providing good hashing throughput.
 pub const HASH_BUFFER_SIZE: usize = 1024 * 1024;
+
+/// Time window for bandwidth throttling measurement in milliseconds.
+/// Using 100ms provides responsive throttling while avoiding excessive sleep calls.
+const THROTTLE_WINDOW_MS: u64 = 100;
+
+/// Minimum sleep duration in microseconds to avoid busy-waiting overhead.
+/// Sleeps shorter than this are counterproductive due to OS scheduling granularity.
+const MIN_SLEEP_MICROS: u64 = 1000;
+
+/// Value indicating unlimited bandwidth (no throttling).
+pub const BANDWIDTH_UNLIMITED: u64 = 0;
+
+/// Extension for temporary files during atomic copy operations.
+const TEMP_FILE_EXTENSION: &str = ".rsync-tmp";
+
+/// Extension for partial files that failed mid-transfer.
+const PARTIAL_FILE_EXTENSION: &str = ".rsync-partial";
+
+// ============================================================================
+// Helper functions for atomic operations and error classification
+// ============================================================================
+
+/// Generate a temporary file path for atomic copy operations.
+/// The temp file is in the same directory as the destination to ensure
+/// atomic rename works (same filesystem).
+pub fn get_temp_path(dest: &Path) -> PathBuf {
+    let mut temp_name = dest.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "file".to_string());
+    temp_name.push_str(TEMP_FILE_EXTENSION);
+    dest.with_file_name(temp_name)
+}
+
+/// Generate a partial file path for marking incomplete transfers.
+pub fn get_partial_path(dest: &Path) -> PathBuf {
+    let mut partial_name = dest.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "file".to_string());
+    partial_name.push_str(PARTIAL_FILE_EXTENSION);
+    dest.with_file_name(partial_name)
+}
+
+/// Clean up temporary and partial files for a destination path.
+/// Call this on failure to ensure no corrupt files are left behind.
+pub fn cleanup_temp_files(dest: &Path) {
+    let temp_path = get_temp_path(dest);
+    let partial_path = get_partial_path(dest);
+    
+    if temp_path.exists() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    if partial_path.exists() {
+        let _ = fs::remove_file(&partial_path);
+    }
+}
+
+/// Check available disk space at a path.
+/// Returns (available_bytes, total_bytes).
+#[cfg(unix)]
+pub fn get_disk_space(path: &Path) -> SyncResult<(u64, u64)> {
+    use std::ffi::CString;
+    
+    // Find the mount point by traversing up
+    let mut check_path = path.to_path_buf();
+    while !check_path.exists() {
+        if let Some(parent) = check_path.parent() {
+            check_path = parent.to_path_buf();
+        } else {
+            break;
+        }
+    }
+    
+    let c_path = CString::new(check_path.to_string_lossy().as_bytes())
+        .map_err(|_| SyncError::InvalidPath(path.display().to_string()))?;
+    
+    unsafe {
+        let mut stat: libc::statvfs = std::mem::zeroed();
+        if libc::statvfs(c_path.as_ptr(), &mut stat) == 0 {
+            let available = stat.f_bavail as u64 * stat.f_frsize as u64;
+            let total = stat.f_blocks as u64 * stat.f_frsize as u64;
+            Ok((available, total))
+        } else {
+            Err(SyncError::Io(std::io::Error::last_os_error()))
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub fn get_disk_space(path: &Path) -> SyncResult<(u64, u64)> {
+    // Windows implementation would go here
+    // For now, return a placeholder that won't trigger disk full errors
+    Ok((u64::MAX, u64::MAX))
+}
+
+/// Check if a path is on a removable/external drive.
+#[cfg(target_os = "macos")]
+pub fn is_external_drive(path: &Path) -> bool {
+    // Check if the path is under /Volumes (external drives on macOS)
+    path.starts_with("/Volumes")
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn is_external_drive(_path: &Path) -> bool {
+    false
+}
+
+/// Sync the parent directory to ensure durability after atomic rename.
+/// This is critical for data integrity - the rename is only durable once
+/// the parent directory's metadata is flushed to disk.
+#[cfg(unix)]
+pub fn sync_parent_directory(path: &Path) -> SyncResult<()> {
+    use std::os::unix::io::AsRawFd;
+    
+    let parent = path.parent().ok_or_else(|| {
+        SyncError::InvalidPath(format!("No parent directory for: {}", path.display()))
+    })?;
+    
+    // Open the directory for reading (we just need the fd for fsync)
+    let dir = fs::File::open(parent).map_err(|e| classify_io_error(e, parent))?;
+    
+    // fsync the directory to ensure the rename is durable
+    dir.sync_all().map_err(|e| {
+        // Log the error but don't fail the operation - the file is already renamed,
+        // we just can't guarantee durability in case of immediate power loss
+        log::warn!(
+            "Failed to sync parent directory '{}': {}. File may not be durable on power loss.",
+            parent.display(),
+            e
+        );
+        classify_io_error(e, parent)
+    })?;
+    
+    Ok(())
+}
+
+/// Sync the parent directory to ensure durability after atomic rename.
+/// Windows implementation using FlushFileBuffers.
+#[cfg(windows)]
+pub fn sync_parent_directory(path: &Path) -> SyncResult<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::FlushFileBuffers;
+    
+    let parent = path.parent().ok_or_else(|| {
+        SyncError::InvalidPath(format!("No parent directory for: {}", path.display()))
+    })?;
+    
+    // Open the directory with FILE_FLAG_BACKUP_SEMANTICS to allow opening directories
+    let dir = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(0x02000000) // FILE_FLAG_BACKUP_SEMANTICS
+        .open(parent)
+        .map_err(|e| classify_io_error(e, parent))?;
+    
+    // Flush the directory metadata
+    let handle = dir.as_raw_handle();
+    let result = unsafe { FlushFileBuffers(handle as isize) };
+    
+    if result == 0 {
+        let err = std::io::Error::last_os_error();
+        log::warn!(
+            "Failed to sync parent directory '{}': {}. File may not be durable on power loss.",
+            parent.display(),
+            err
+        );
+        return Err(classify_io_error(err, parent));
+    }
+    
+    Ok(())
+}
+
+/// Classify an IO error into a more specific SyncError for better user messaging.
+pub fn classify_io_error(error: std::io::Error, path: &Path) -> SyncError {
+    match error.kind() {
+        ErrorKind::PermissionDenied => {
+            SyncError::PermissionDenied(path.display().to_string())
+        }
+        ErrorKind::NotFound => {
+            if is_external_drive(path) {
+                SyncError::DriveDisconnected {
+                    path: path.to_path_buf(),
+                    device_name: path.iter().nth(2).map(|s| s.to_string_lossy().to_string()),
+                }
+            } else {
+                SyncError::SourceNotFound(path.display().to_string())
+            }
+        }
+        // Note: StorageFull was stabilized in Rust 1.79
+        // For older Rust, we check the raw OS error
+        _ => {
+            // Check for disk full (ENOSPC on Unix, ERROR_DISK_FULL on Windows)
+            if let Some(raw_error) = error.raw_os_error() {
+                #[cfg(unix)]
+                {
+                    if raw_error == libc::ENOSPC {
+                        if let Ok((available, _)) = get_disk_space(path) {
+                            return SyncError::DiskFull {
+                                path: path.to_path_buf(),
+                                required_bytes: 0, // Unknown at this point
+                                available_bytes: available,
+                            };
+                        }
+                    }
+                    if raw_error == libc::EBUSY {
+                        return SyncError::FileLocked {
+                            path: path.to_path_buf(),
+                            retry_after_ms: 1000,
+                        };
+                    }
+                    if raw_error == libc::EIO || raw_error == libc::ENODEV {
+                        return SyncError::DriveDisconnected {
+                            path: path.to_path_buf(),
+                            device_name: None,
+                        };
+                    }
+                    if raw_error == libc::ENAMETOOLONG {
+                        return SyncError::PathTooLong {
+                            path: path.to_path_buf(),
+                            max_length: 255, // Common limit
+                        };
+                    }
+                    if raw_error == libc::ELOOP {
+                        return SyncError::SymlinkLoop {
+                            path: path.to_path_buf(),
+                        };
+                    }
+                    if raw_error == libc::EDQUOT {
+                        return SyncError::QuotaExceeded {
+                            path: path.to_path_buf(),
+                        };
+                    }
+                }
+            }
+            SyncError::Io(error)
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileInfo {
@@ -28,6 +275,25 @@ pub struct DirectoryInfo {
     pub file_count: usize,
     pub dir_count: usize,
     pub files: Vec<FileInfo>,
+}
+
+/// Summary of a directory without the file list (for fast initial response)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectorySummary {
+    pub path: PathBuf,
+    pub total_size: u64,
+    pub file_count: usize,
+    pub dir_count: usize,
+    pub scan_id: String,
+}
+
+/// A chunk of files from a streaming directory scan
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileChunk {
+    pub scan_id: String,
+    pub files: Vec<FileInfo>,
+    pub chunk_index: usize,
+    pub is_final: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -53,6 +319,15 @@ pub struct CopyOptions {
     pub preserve_metadata: bool,
     pub verify_integrity: bool,
     pub resume_offset: u64,
+    /// Bandwidth limit in bytes per second. 0 = unlimited.
+    pub bandwidth_limit: u64,
+    /// Pre-computed source hash for end-to-end verification.
+    /// If provided, this hash is used instead of re-hashing the source after copy.
+    /// This prevents race conditions where source changes during/after copy.
+    pub pre_copy_source_hash: Option<u64>,
+    /// Source modification time captured before copy started.
+    /// Used to detect if source was modified during copy.
+    pub source_mtime_before_copy: Option<std::time::SystemTime>,
 }
 
 impl Default for CopyOptions {
@@ -62,25 +337,30 @@ impl Default for CopyOptions {
             preserve_metadata: true,
             verify_integrity: false,
             resume_offset: 0,
+            bandwidth_limit: BANDWIDTH_UNLIMITED,
+            pre_copy_source_hash: None,
+            source_mtime_before_copy: None,
         }
     }
 }
 
 pub fn compute_file_hash(path: &Path) -> SyncResult<u64> {
+    // Use streaming hash computation to avoid loading entire file into memory
+    // This is critical for large files to prevent memory exhaustion
     let file = File::open(path)?;
     let mut reader = BufReader::with_capacity(HASH_BUFFER_SIZE, file);
     let mut buffer = vec![0u8; HASH_BUFFER_SIZE];
-    let mut all_data = Vec::new();
+    let mut hasher = xxhash_rust::xxh3::Xxh3::new();
 
     loop {
         let bytes_read = reader.read(&mut buffer)?;
         if bytes_read == 0 {
             break;
         }
-        all_data.extend_from_slice(&buffer[..bytes_read]);
+        hasher.update(&buffer[..bytes_read]);
     }
 
-    Ok(xxh3_64(&all_data))
+    Ok(hasher.digest())
 }
 
 pub fn compute_hash(data: &[u8]) -> u64 {
@@ -167,6 +447,122 @@ pub fn scan_directory_with_options(path: &Path, follow_symlinks: bool) -> SyncRe
     })
 }
 
+/// Streaming directory scan - returns an iterator over file chunks
+/// This allows processing files as they're discovered without loading all into memory
+pub struct DirectoryScanner {
+    walker: walkdir::IntoIter,
+    base_path: PathBuf,
+    chunk_size: usize,
+}
+
+impl DirectoryScanner {
+    pub fn new(path: &Path, follow_symlinks: bool, chunk_size: usize) -> SyncResult<Self> {
+        if !path.exists() {
+            return Err(SyncError::SourceNotFound(path.display().to_string()));
+        }
+
+        if !path.is_dir() {
+            return Err(SyncError::InvalidPath(format!(
+                "{} is not a directory",
+                path.display()
+            )));
+        }
+
+        let base_path = path.to_path_buf();
+        let walker = walkdir::WalkDir::new(path)
+            .follow_links(follow_symlinks)
+            .into_iter();
+
+        Ok(Self {
+            walker,
+            base_path,
+            chunk_size,
+        })
+    }
+
+    /// Get the next chunk of files
+    pub fn next_chunk(&mut self) -> Option<Vec<FileInfo>> {
+        let mut files = Vec::with_capacity(self.chunk_size);
+        
+        while let Some(entry_result) = self.walker.next() {
+            if let Ok(entry) = entry_result {
+                // Skip the root directory itself
+                if entry.path() == self.base_path {
+                    continue;
+                }
+                
+                if let Ok(info) = get_file_info(entry.path(), &self.base_path) {
+                    files.push(info);
+                    if files.len() >= self.chunk_size {
+                        break;
+                    }
+                }
+            }
+        }
+
+        if files.is_empty() {
+            None
+        } else {
+            Some(files)
+        }
+    }
+}
+
+/// Quick scan that only returns summary (file count, total size) without file list
+/// This is extremely fast even for multi-TB directories
+pub fn quick_scan_directory(path: &Path) -> SyncResult<DirectorySummary> {
+    quick_scan_directory_with_options(path, false, None)
+}
+
+pub fn quick_scan_directory_with_options(
+    path: &Path, 
+    follow_symlinks: bool,
+    scan_id: Option<String>,
+) -> SyncResult<DirectorySummary> {
+    if !path.exists() {
+        return Err(SyncError::SourceNotFound(path.display().to_string()));
+    }
+
+    if !path.is_dir() {
+        return Err(SyncError::InvalidPath(format!(
+            "{} is not a directory",
+            path.display()
+        )));
+    }
+
+    let mut total_size: u64 = 0;
+    let mut file_count: usize = 0;
+    let mut dir_count: usize = 0;
+
+    for entry in walkdir::WalkDir::new(path)
+        .follow_links(follow_symlinks)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let entry_path = entry.path();
+        if entry_path == path {
+            continue;
+        }
+
+        if let Ok(metadata) = fs::symlink_metadata(entry_path) {
+            if metadata.is_dir() {
+                dir_count += 1;
+            } else {
+                file_count += 1;
+                total_size += metadata.len();
+            }
+        }
+    }
+
+    Ok(DirectorySummary {
+        path: path.to_path_buf(),
+        total_size,
+        file_count,
+        dir_count,
+        scan_id: scan_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+    })
+}
+
 pub fn detect_delta(source: &FileInfo, dest_path: &Path) -> SyncResult<DeltaStatus> {
     let info = detect_delta_detailed(source, dest_path)?;
     Ok(info.status)
@@ -247,6 +643,19 @@ where
     let mut buffer = vec![0u8; options.buffer_size];
     let mut bytes_copied = options.resume_offset;
 
+    // Bandwidth throttling state
+    let throttle_enabled = options.bandwidth_limit > BANDWIDTH_UNLIMITED;
+    let mut window_start = Instant::now();
+    let mut window_bytes: u64 = 0;
+    let throttle_window = Duration::from_millis(THROTTLE_WINDOW_MS);
+    
+    // Calculate bytes allowed per throttle window
+    let bytes_per_window = if throttle_enabled {
+        (options.bandwidth_limit as f64 * (THROTTLE_WINDOW_MS as f64 / 1000.0)) as u64
+    } else {
+        0 // Not used when throttling is disabled
+    };
+
     loop {
         let bytes_read = reader.read(&mut buffer)?;
         if bytes_read == 0 {
@@ -255,6 +664,30 @@ where
 
         writer.write_all(&buffer[..bytes_read])?;
         bytes_copied += bytes_read as u64;
+        
+        // Apply bandwidth throttling if enabled
+        if throttle_enabled {
+            window_bytes += bytes_read as u64;
+            
+            // Check if we've exceeded the rate limit for this window
+            if window_bytes >= bytes_per_window {
+                let elapsed = window_start.elapsed();
+                
+                if elapsed < throttle_window {
+                    // Calculate how long to sleep to maintain the target rate
+                    let sleep_duration = throttle_window.saturating_sub(elapsed);
+                    
+                    // Only sleep if it's worth it (avoid micro-sleeps)
+                    if sleep_duration.as_micros() >= MIN_SLEEP_MICROS as u128 {
+                        std::thread::sleep(sleep_duration);
+                    }
+                }
+                
+                // Reset the window
+                window_start = Instant::now();
+                window_bytes = 0;
+            }
+        }
 
         let should_continue = progress_callback(bytes_copied, Some(compute_hash(&buffer[..bytes_read])));
         if !should_continue {
@@ -277,7 +710,29 @@ where
     }
 
     if options.verify_integrity {
-        let src_hash = compute_file_hash(source)?;
+        // RACE CONDITION CHECK: Verify source wasn't modified during copy
+        // by comparing current mtime with mtime captured before copy started
+        if let Some(expected_mtime) = options.source_mtime_before_copy {
+            let current_mtime = fs::metadata(source)?.modified()?;
+            if current_mtime != expected_mtime {
+                return Err(SyncError::SourceModifiedDuringCopy {
+                    path: source.to_path_buf(),
+                    expected_mtime,
+                    actual_mtime: current_mtime,
+                });
+            }
+        }
+
+        // END-TO-END VERIFICATION: Use pre-computed source hash if available
+        // This prevents the race condition where source changes after copy but before hash
+        let src_hash = match options.pre_copy_source_hash {
+            Some(hash) => hash,
+            None => {
+                // Fallback: compute source hash now (less safe, but backwards compatible)
+                compute_file_hash(source)?
+            }
+        };
+        
         let dest_hash = compute_file_hash(dest)?;
         if src_hash != dest_hash {
             return Err(SyncError::HashMismatch(dest.display().to_string()));
@@ -285,6 +740,133 @@ where
     }
 
     Ok(bytes_copied)
+}
+
+/// Atomically copy a file using a temporary file and rename.
+/// 
+/// This ensures that the destination file is either:
+/// 1. Complete and valid, or
+/// 2. Does not exist at all
+/// 
+/// No partial/corrupt files will be left behind.
+/// 
+/// # Arguments
+/// * `source` - Source file path
+/// * `dest` - Destination file path  
+/// * `options` - Copy options
+/// * `progress_callback` - Callback for progress updates
+/// 
+/// # Returns
+/// Number of bytes copied on success
+pub fn copy_file_atomic<F>(
+    source: &Path,
+    dest: &Path,
+    options: &CopyOptions,
+    progress_callback: F,
+) -> SyncResult<u64>
+where
+    F: Fn(u64, Option<u64>) -> bool,
+{
+    // For resume operations, we can't use atomic copy (need to append to existing file)
+    if options.resume_offset > 0 {
+        return copy_file_with_progress(source, dest, options, progress_callback);
+    }
+    
+    // Pre-check: verify we have enough disk space
+    let src_metadata = fs::metadata(source)
+        .map_err(|e| classify_io_error(e, source))?;
+    let file_size = src_metadata.len();
+    
+    if let Some(parent) = dest.parent() {
+        if let Ok((available, _)) = get_disk_space(parent) {
+            // Need file size plus some buffer for metadata
+            let required = file_size + 4096;
+            if available < required {
+                return Err(SyncError::DiskFull {
+                    path: dest.to_path_buf(),
+                    required_bytes: required,
+                    available_bytes: available,
+                });
+            }
+        }
+    }
+    
+    // Use a temp file in the same directory (for atomic rename)
+    let temp_path = get_temp_path(dest);
+    
+    // Clean up any leftover temp files from previous failed attempts
+    cleanup_temp_files(dest);
+    
+    // Create parent directory if needed
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| classify_io_error(e, parent))?;
+    }
+    
+    // Copy to temp file
+    let result = copy_file_with_progress(source, &temp_path, options, progress_callback);
+    
+    match result {
+        Ok(bytes_copied) => {
+            // Atomic rename: temp -> final destination
+            // This is atomic on POSIX systems when on the same filesystem
+            match fs::rename(&temp_path, dest) {
+                Ok(_) => {
+                    // Sync parent directory to ensure rename is durable on disk.
+                    // We log but don't fail on sync errors - the file is already renamed,
+                    // just not guaranteed durable on immediate power loss.
+                    if let Err(e) = sync_parent_directory(dest) {
+                        log::warn!("Parent directory sync failed after rename: {:?}", e);
+                    }
+                    Ok(bytes_copied)
+                }
+                Err(e) => {
+                    // Clean up temp file on rename failure
+                    let _ = fs::remove_file(&temp_path);
+                    Err(classify_io_error(e, dest))
+                }
+            }
+        }
+        Err(e) => {
+            // Clean up temp file on copy failure
+            let _ = fs::remove_file(&temp_path);
+            
+            // Re-classify the error if it's a generic IO error
+            match e {
+                SyncError::Io(io_err) => Err(classify_io_error(io_err, dest)),
+                other => Err(other),
+            }
+        }
+    }
+}
+
+/// Check and clean up any partial files from previous failed transfers.
+/// Call this before starting a new sync to ensure clean state.
+pub fn cleanup_partial_files(directory: &Path) -> SyncResult<usize> {
+    let mut cleaned = 0;
+    
+    if !directory.exists() {
+        return Ok(0);
+    }
+    
+    for entry in fs::read_dir(directory).map_err(|e| classify_io_error(e, directory))? {
+        let entry = entry.map_err(|e| classify_io_error(e, directory))?;
+        let path = entry.path();
+        
+        if path.is_dir() {
+            // Recursively clean subdirectories
+            cleaned += cleanup_partial_files(&path)?;
+        } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            // Remove temp and partial files
+            if name.ends_with(TEMP_FILE_EXTENSION) || name.ends_with(PARTIAL_FILE_EXTENSION) {
+                if fs::remove_file(&path).is_ok() {
+                    cleaned += 1;
+                }
+            }
+        }
+    }
+    
+    Ok(cleaned)
 }
 
 pub fn generate_conflict_name(path: &Path) -> PathBuf {

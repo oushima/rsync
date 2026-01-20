@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import { FolderSync, History, Settings, ChevronLeft, ChevronRight } from 'lucide-react';
 import clsx from 'clsx';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useSyncStore } from '../../stores/syncStore';
 import { Tooltip } from '../ui/Tooltip';
 import type { NavigationPage } from '../../types';
@@ -24,6 +25,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({ language = 'en' }: SidebarProps) {
+  const { t } = useTranslation();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const { currentPage, setCurrentPage } = useSyncStore();
 
@@ -124,7 +126,7 @@ export function Sidebar({ language = 'en' }: SidebarProps) {
       <div className="px-3 py-4">
         <button
           onClick={() => setIsCollapsed(!isCollapsed)}
-          aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-label={isCollapsed ? t('sidebar.expand') : t('sidebar.collapse')}
           className={clsx(
             'w-full flex items-center justify-center gap-2 px-2 py-2',
             'rounded-lg',
@@ -138,7 +140,7 @@ export function Sidebar({ language = 'en' }: SidebarProps) {
           ) : (
             <>
               <ChevronLeft className="w-4 h-4" strokeWidth={1.75} />
-              <span className="text-xs">Collapse</span>
+              <span className="text-xs">{t('sidebar.collapse')}</span>
             </>
           )}
         </button>

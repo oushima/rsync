@@ -51,9 +51,15 @@ const K_IOPM_ASSERTION_LEVEL_ON: u32 = 255;
 /// Global assertion ID - 0 means no active assertion
 static POWER_ASSERTION_ID: AtomicU32 = AtomicU32::new(0);
 
-/// Creates a CFString from a Rust string
+/// Creates a CFString from a Rust string.
+/// Returns null pointer if the string contains a null byte.
 fn create_cf_string(s: &str) -> *const std::ffi::c_void {
-    let c_str = CString::new(s).unwrap();
+    // Filter out null bytes to prevent panic
+    let sanitized = s.replace('\0', "");
+    let c_str = match CString::new(sanitized) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null(),
+    };
     unsafe { CFStringCreateWithCString(std::ptr::null(), c_str.as_ptr(), K_CF_STRING_ENCODING_UTF8) }
 }
 

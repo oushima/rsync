@@ -1,13 +1,17 @@
-import { forwardRef, type HTMLAttributes, type ReactNode } from 'react';
-import { motion } from 'framer-motion';
+import { forwardRef, type ReactNode } from 'react';
+import { motion, type HTMLMotionProps } from 'framer-motion';
 import clsx from 'clsx';
 
-export interface CardProps extends HTMLAttributes<HTMLDivElement> {
+// Omit children from motion props to use React's ReactNode type instead
+type BaseCardProps = Omit<HTMLMotionProps<'div'>, 'ref' | 'children'>;
+
+export interface CardProps extends BaseCardProps {
   variant?: 'default' | 'elevated' | 'outlined';
   padding?: 'none' | 'sm' | 'md' | 'lg';
   hoverable?: boolean;
   header?: ReactNode;
   footer?: ReactNode;
+  children?: ReactNode;
 }
 
 export const Card = forwardRef<HTMLDivElement, CardProps>(
@@ -37,49 +41,52 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(
       lg: 'p-6',
     };
 
-    const Component = hoverable ? motion.div : 'div';
-    const hoverProps = hoverable
-      ? {
-          whileHover: { scale: 1.01, y: -2 },
-          transition: { duration: 0.2 },
-        }
-      : {};
+    const cardClassName = clsx(
+      'rounded-2xl',
+      'transition-colors duration-150 ease-out',
+      variants[variant],
+      hoverable && 'cursor-pointer',
+      className
+    );
 
-    return (
-      <Component
-        ref={ref}
-        className={clsx(
-          'rounded-2xl',
-          'transition-colors duration-150 ease-out',
-          variants[variant],
-          hoverable && 'cursor-pointer',
-          className
-        )}
-        {...hoverProps}
-        {...(props as any)}
-      >
+    const cardContent = (
+      <>
         {header && (
-          <div
-            className={clsx(
-              'border-b border-border',
-              paddings[padding]
-            )}
-          >
+          <div className={clsx('border-b border-border', paddings[padding])}>
             {header}
           </div>
         )}
         <div className={paddings[padding]}>{children}</div>
         {footer && (
-          <div
-            className={clsx(
-              'border-t border-border',
-              paddings[padding]
-            )}
-          >
+          <div className={clsx('border-t border-border', paddings[padding])}>
             {footer}
           </div>
         )}
-      </Component>
+      </>
+    );
+
+    // Render motion.div for hoverable cards, regular div otherwise
+    // Both use the same props type (HTMLMotionProps) to avoid type conflicts
+    if (hoverable) {
+      return (
+        <motion.div
+          ref={ref}
+          className={cardClassName}
+          whileHover={{ scale: 1.01, y: -2 }}
+          transition={{ duration: 0.2 }}
+          {...props}
+        >
+          {cardContent}
+        </motion.div>
+      );
+    }
+
+    // For non-hoverable cards, use motion.div without animation props
+    // This maintains consistent prop types throughout
+    return (
+      <motion.div ref={ref} className={cardClassName} {...props}>
+        {cardContent}
+      </motion.div>
     );
   }
 );
